@@ -1567,11 +1567,7 @@ bool QueryCacheRuntime::HostConditionalRenderingCompareValues(VideoCommon::Looku
     auto driver_id = impl->device.GetDriverID();
     const bool is_gpu_high = Settings::IsGPULevelHigh();
 
-    // EDEN_NX2_INTEL_CONDRENDER=1 keeps host conditional rendering on Intel Windows below high
-    // GPU accuracy. Without it Ocarina of Time draws its occluded light sprites, and the grass
-    // and leaves glow white (Arc B390, driver 101.8991).
-    static const bool intel_condrender = std::getenv("EDEN_NX2_INTEL_CONDRENDER") != nullptr;
-    if ((!is_gpu_high && !intel_condrender && driver_id == VK_DRIVER_ID_INTEL_PROPRIETARY_WINDOWS) || driver_id == VK_DRIVER_ID_QUALCOMM_PROPRIETARY || driver_id == VK_DRIVER_ID_ARM_PROPRIETARY || driver_id == VK_DRIVER_ID_MESA_TURNIP) {
+    if ((!is_gpu_high && driver_id == VK_DRIVER_ID_INTEL_PROPRIETARY_WINDOWS) || driver_id == VK_DRIVER_ID_QUALCOMM_PROPRIETARY || driver_id == VK_DRIVER_ID_ARM_PROPRIETARY || driver_id == VK_DRIVER_ID_MESA_TURNIP) {
         EndHostConditionalRendering();
         TraceConditionalRendering("driver-bypass", true, object_1.address, object_2.address);
         return true;

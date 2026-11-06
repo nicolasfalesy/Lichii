@@ -141,6 +141,16 @@ constexpr u64 FramePassProgramKey = 0x2a366b38546a4d5eULL;
 constexpr u32 FrameOffset = 0x70;
 constexpr u32 OutputOffset = 0xc8;
 
+// Gameplay post-process chain (shader hashes, as the frame dump names them): a tile classifier
+// reads the scene colour (B10G11R11), two passes build work lists, and a resolve writes the
+// result over the colour target the HUD is drawn on. On an Intel Arc B390 the resolve read its
+// lists half-written: tiles of stale black flickered around edges, leaves and the HUD boxes.
+// A copy of the scene colour stands in for the chain.
+constexpr u64 AaClassifyHash = 0xa107e12b6771be48ULL;
+constexpr u64 AaListHash = 0xd9ee412f00ce399aULL;
+constexpr u64 AaEdgesHash = 0xa2fcaa95c5a162f3ULL;
+constexpr u64 AaResolveHash = 0x6bd913e1f34e83ebULL;
+
 constexpr bool IsNetworkProgram(u64 native_key) {
     for (const u64 key : NetworkProgramKeys) {
         if (key == native_key) {

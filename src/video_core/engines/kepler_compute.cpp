@@ -1171,6 +1171,111 @@ bool KeplerCompute::TryOcarinaMovieUpscale() {
     return done;
 }
 
+bool KeplerCompute::ProcessOcarinaPostChain(u64 shader_hash) {
+    namespace Ocarina = VideoCommon::FireEmblemUpscale::Ocarina;
+    // EDEN_NX2_OCARINA_POST=native keeps the game's chain, for comparisons.
+    static const bool native = [] {
+        const char* const option = std::getenv("EDEN_NX2_OCARINA_POST");
+        return option && std::string_view{option} == "native";
+    }();
+    if (native) {
+        return false;
+    }
+    if (shader_hash == Ocarina::AaClassifyHash) {
+        ocarina_post_color = FindComputeColorImage(0, std::nullopt);
+        return ocarina_post_replaced;
+    }
+    if (shader_hash == Ocarina::AaListHash || shader_hash == Ocarina::AaEdgesHash) {
+        return ocarina_post_replaced;
+    }
+    if (shader_hash == Ocarina::AaResolveHash) {
+        ocarina_post_replaced = TryOcarinaPostChainCopy();
+        return ocarina_post_replaced;
+    }
+    return false;
+}
+
+std::optional<Texture::TICEntry> KeplerCompute::FindComputeColorImage(
+    GPUVAddr exclude, const std::optional<Texture::TICEntry>& size_of) const {
+    const auto& cbuf = launch_description.const_buffer_config[0];
+    const GPUVAddr address = (GPUVAddr{cbuf.address_high} << 32) | cbuf.address_low;
+    const u32 bytes = (std::min<u32>)(cbuf.size.Value(), 0x400);
+    if (!(launch_description.const_buffer_enable_mask & 1) || bytes < 4 ||
+        !memory_manager.IsFullyMappedRange(address, bytes)) {
+        return std::nullopt;
+    }
+    for (u32 offset = 0; offset + 4 <= bytes; offset += 4) {
+        const u32 index = memory_manager.Read<u32>(address + offset) & 0xfffff;
+        if (index == 0 || index > regs.tic.limit ||
+            !memory_manager.IsFullyMappedRange(
+                regs.tic.Address() + u64{index} * sizeof(Texture::TICEntry),
+                sizeof(Texture::TICEntry))) {
+            continue;
+        }
+        const auto tic = GetTICEntry(index);
+        using namespace Texture;
+        if (tic.format != TextureFormat::B10G11R11 || tic.Address() == 0 ||
+            tic.Address() == exclude || !tic.IsBlockLinear() || tic.Depth() != 1 ||
+            tic.max_mip_level != 0 || tic.Width() < 320 ||
+            (tic.texture_type != TextureType::Texture2D &&
+             tic.texture_type != TextureType::Texture2DNoMipmap)) {
+            continue;
+        }
+        if (size_of && (tic.Width() != size_of->Width() || tic.Height() != size_of->Height())) {
+            continue;
+        }
+        return tic;
+    }
+    return std::nullopt;
+}
+
+bool KeplerCompute::TryOcarinaPostChainCopy() {
+    const auto input = std::exchange(ocarina_post_color, std::nullopt);
+    const auto output = input ? FindComputeColorImage(input->Address(), input) : std::nullopt;
+    static u32 logged{};
+    if (!input || !output) {
+        if (logged++ < 4) {
+            LOG_WARNING(HW_GPU, "Ocarina post chain: no colour pair (input {}, output {}); the "
+                        "game's chain runs", input.has_value(), output.has_value());
+        }
+        return false;
+    }
+    const auto surface = [](const Texture::TICEntry& tic) {
+        Fermi2D::Surface result{};
+        result.format = Tegra::RenderTargetFormat::B10G11R11_FLOAT;
+        result.linear = Fermi2D::MemoryLayout::BlockLinear;
+        result.block_width.Assign(tic.block_width);
+        result.block_height.Assign(tic.block_height);
+        result.block_depth.Assign(tic.block_depth);
+        result.depth = 1;
+        result.width = tic.Width();
+        result.height = tic.Height();
+        result.addr_upper = static_cast<u32>(tic.Address() >> 32);
+        result.addr_lower = static_cast<u32>(tic.Address());
+        return result;
+    };
+    const Fermi2D::Config copy{
+        .operation = Fermi2D::Operation::SrcCopy,
+        .filter = Fermi2D::Filter::Point,
+        .must_accelerate = true,
+        .dst_x0 = 0,
+        .dst_y0 = 0,
+        .dst_x1 = static_cast<s32>(output->Width()),
+        .dst_y1 = static_cast<s32>(output->Height()),
+        .src_x0 = 0,
+        .src_y0 = 0,
+        .src_x1 = static_cast<s32>(input->Width()),
+        .src_y1 = static_cast<s32>(input->Height()),
+    };
+    const bool done = rasterizer->AccelerateSurfaceCopy(surface(*input), surface(*output), copy);
+    if (logged++ < 4) {
+        LOG_INFO(HW_GPU, "Ocarina post chain: {} input={:#x} output={:#x} {}x{}",
+                 done ? "replaced by a copy" : "copy unavailable; the game's chain runs",
+                 input->Address(), output->Address(), output->Width(), output->Height());
+    }
+    return done;
+}
+
 void KeplerCompute::ProcessLaunch() {
     const GPUVAddr launch_desc_loc = regs.launch_desc_loc.Address();
     memory_manager.ReadBlockUnsafe(launch_desc_loc, &launch_description,

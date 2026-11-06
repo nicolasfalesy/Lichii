@@ -256,6 +256,8 @@ public:
     /// Ocarina of Time's title movie network: whether this dispatch is replaced (see
     /// FireEmblemUpscale::Ocarina).
     bool ProcessOcarinaMovie(u64 native_key);
+    /// Ocarina's gameplay post-process chain, by shader hash: whether this dispatch is replaced.
+    bool ProcessOcarinaPostChain(u64 shader_hash);
     void TraceDlssContract(u64 native_key, bool warn_unvalidated = true);
 
     /// GPU thread split with macros on its front half (gpu_split.h, EDEN_NX2_SPLIT=2), called by
@@ -285,6 +287,13 @@ private:
     bool TryFireEmblemUpscale(bool allow_history = true);
     bool TryOcarinaMovieUpscale();
     std::optional<Texture::TICEntry> ReadComputeImage(u32 cbuf0_offset) const;
+    /// First image handle in constant bank 0 that is a plain 2D B10G11R11 image other than
+    /// `exclude` (and, when given, of the same size as `size_of`).
+    std::optional<Texture::TICEntry> FindComputeColorImage(
+        GPUVAddr exclude, const std::optional<Texture::TICEntry>& size_of) const;
+    bool TryOcarinaPostChainCopy();
+    std::optional<Texture::TICEntry> ocarina_post_color;
+    bool ocarina_post_replaced{};
     /// The movie frame this evaluation's network reads, taken at its last pass.
     std::optional<Texture::TICEntry> ocarina_movie_frame;
     /// The last output pass was replaced, so the next evaluation's network passes are skipped.
