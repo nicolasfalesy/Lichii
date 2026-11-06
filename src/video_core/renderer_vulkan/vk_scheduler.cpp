@@ -47,6 +47,16 @@ std::mutex g_profile_end_mutex;
 std::map<std::string, u64> g_profile_ends;
 // Finish() calls by caller: count and nanoseconds waited.
 std::map<std::string, std::pair<u64, u64>> g_profile_finish_sites;
+// Flush() calls (queue submissions) by caller.
+std::map<std::string, u64> g_profile_flush_sites;
+
+std::string ProfileSite(const std::source_location& location) {
+    std::string_view name{location.file_name()};
+    if (const auto slash = name.find_last_of("/\\"); slash != std::string_view::npos) {
+        name.remove_prefix(slash + 1);
+    }
+    return fmt::format("{}:{}", name, location.line());
+}
 
 void CountRenderPassEnd(const char* file, u32 line) {
     if (!VideoCommon::Nx2Profile::Enabled()) {
@@ -106,6 +116,19 @@ void ReportSubmitCounts() {
                  static_cast<double>(std::get<1>(finishes[i])) / seconds,
                  static_cast<double>(std::get<0>(finishes[i])) / 1e6 / seconds,
                  std::get<2>(finishes[i]));
+    }
+    std::vector<std::pair<u64, std::string>> flushes;
+    {
+        std::scoped_lock lock{g_profile_end_mutex};
+        for (const auto& [site, count] : g_profile_flush_sites) {
+            flushes.emplace_back(count, site);
+        }
+        g_profile_flush_sites.clear();
+    }
+    std::sort(flushes.rbegin(), flushes.rend());
+    for (size_t i = 0; i < flushes.size() && i < 12; ++i) {
+        LOG_INFO(Render_Vulkan, "Submits {:.0f}/s from {}",
+                 static_cast<double>(flushes[i].first) / seconds, flushes[i].second);
     }
 }
 }
@@ -184,6 +207,10 @@ u64 Scheduler::Flush(VkSemaphore signal_semaphore, VkSemaphore wait_semaphore,
                      std::source_location location) {
     if (state.renderpass) {
         CountRenderPassEnd(location.file_name(), location.line());
+    }
+    if (VideoCommon::Nx2Profile::Enabled()) {
+        std::scoped_lock lock{g_profile_end_mutex};
+        ++g_profile_flush_sites[ProfileSite(location)];
     }
     if (VideoCommon::GpuSplit::check_owner) [[unlikely]] {
         VideoCommon::GpuSplit::CheckOwner("Scheduler::Flush");

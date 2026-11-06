@@ -10,6 +10,7 @@
 #include <map>
 #include <condition_variable>
 #include <mutex>
+#include <optional>
 #include <utility>
 #include <vector>
 
@@ -387,6 +388,31 @@ public:
         }
     }
 
+    /// A max release (QMD completion) of `payload` to the u32 at `device_address`, queued behind
+    /// host GPU work: the word will be at least `payload` once that work is done.
+    void AddPendingMax(u64 device_address, u32 payload) {
+        std::scoped_lock lk{pending_mutex};
+        PendingMaxRelease& entry = pending_max[device_address];
+        entry.payload = entry.count == 0 ? payload : (std::max)(entry.payload, payload);
+        ++entry.count;
+    }
+
+    /// One queued max release to the word was written.
+    void RetirePendingMax(u64 device_address) {
+        std::scoped_lock lk{pending_mutex};
+        if (const auto it = pending_max.find(device_address);
+            it != pending_max.end() && --it->second.count == 0) {
+            pending_max.erase(it);
+        }
+    }
+
+    /// The largest queued max release to the word, if any is still queued.
+    [[nodiscard]] std::optional<u32> PendingMax(u64 device_address) {
+        std::scoped_lock lk{pending_mutex};
+        const auto it = pending_max.find(device_address);
+        return it == pending_max.end() ? std::nullopt : std::optional<u32>{it->second.payload};
+    }
+
     /// Sleeps until a write latches a waiter, or for `timeout` (CPU releases are not seen here).
     template <typename Duration>
     void WaitForLatch(Duration timeout) {
@@ -423,6 +449,13 @@ private:
     std::mutex mutex;
     std::vector<Waiter> waiters;
     std::atomic<size_t> count{};
+
+    struct PendingMaxRelease {
+        u32 payload{};
+        u32 count{};
+    };
+    std::mutex pending_mutex;
+    std::map<u64, PendingMaxRelease> pending_max;
 };
 
 } // namespace Tegra

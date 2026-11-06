@@ -388,11 +388,16 @@ bool KeplerCompute::ProcessNativeMethod(Core::System& system, u32 method, u32 ar
                     // NVN2 tracks QMD completion with a max release (bit 19) into a word other
                     // releases also advance: a plain write would move it backwards and leave
                     // GEQ acquires waiting forever.
+                    // Registered so a GEQ acquire it will meet need not wait for it (puller).
+                    if (const auto device = memory_manager.GpuToCpuAddress(address)) {
+                        Tegra::Nx2SemaphoreWaiters::Get().AddPendingMax(*device, payload);
+                    }
                     rasterizer->SignalFence([this, address, payload] {
                         const u32 value = (std::max)(memory_manager.Read<u32>(address), payload);
                         memory_manager.Write<u32>(address, value);
                         if (const auto device = memory_manager.GpuToCpuAddress(address)) {
                             Tegra::Nx2SemaphoreWaiters::Get().OnWrite(*device, value);
+                            Tegra::Nx2SemaphoreWaiters::Get().RetirePendingMax(*device);
                         }
                     });
                 } else {

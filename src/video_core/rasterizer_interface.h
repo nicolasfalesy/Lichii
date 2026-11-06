@@ -133,6 +133,11 @@ public:
 
     virtual RasterizerDownloadArea GetFlushArea(DAddr addr, u64 size) = 0;
 
+    /// The payload of a semaphore release queued for the word at addr but not yet written.
+    [[nodiscard]] virtual std::optional<u32> PendingSemaphoreRelease([[maybe_unused]] DAddr addr) {
+        return std::nullopt;
+    }
+
     /// Whether reports in the range wait for host query results not yet in guest memory.
     [[nodiscard]] virtual bool HasPendingQueries([[maybe_unused]] DAddr addr,
                                                  [[maybe_unused]] u64 size) {

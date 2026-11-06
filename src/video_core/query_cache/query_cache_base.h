@@ -96,6 +96,10 @@ public:
         return result;
     }
 
+    /// The payload of the newest semaphore release queued for the word at addr whose value is
+    /// not yet in guest memory, if there is one.
+    [[nodiscard]] std::optional<u32> PendingPayload(VAddr addr);
+
     void CounterEnable(QueryType counter_type, bool is_enabled);
 
     void CounterReset(QueryType counter_type);

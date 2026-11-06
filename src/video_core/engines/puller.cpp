@@ -259,26 +259,59 @@ void Puller::ProcessSemaphoreTriggerMethod(DmaPusher& dma_pusher) {
         if (acquire.Matches(ReadSemaphoreWord(dma_pusher, acquire.address))) {
             return;
         }
+        // A release already queued on the host queue that meets the value: everything recorded
+        // after this point runs after it there, so a full barrier gives the ordering the acquire
+        // asks for, without waiting here for the host GPU to drain. Waiting was ~48% of
+        // Ocarina's GPU thread at High accuracy, with the GPU idle meanwhile.
+        // EDEN_NX2_ACQUIRE_LOOKAHEAD=0 opts out.
+        static const bool lookahead = [] {
+            const char* value = std::getenv("EDEN_NX2_ACQUIRE_LOOKAHEAD");
+            return value == nullptr || value[0] != '0';
+        }();
+        if (const auto device = dma_pusher.memory_manager.GpuToCpuAddress(acquire.address);
+            lookahead && device) {
+            bool met = false;
+            VideoCommon::GpuSplit::Get().Run(
+                [&met, &acquire, rasterizer = dma_pusher.rasterizer, address = *device] {
+                    const auto pending = rasterizer->PendingSemaphoreRelease(address);
+                    met = pending && acquire.Matches(*pending);
+                    if (!met && acquire.operation == Nx2SemaphoreWaiters::AcquireGequal) {
+                        const auto pending_max = Nx2SemaphoreWaiters::Get().PendingMax(address);
+                        met = pending_max && *pending_max >= acquire.value;
+                    }
+                    if (met) {
+                        rasterizer->WaitForIdle();
+                    }
+                },
+                VideoCommon::DrainSite::Acquire);
+            if (met) {
+                if (static std::atomic<u64> skipped{};
+                    (skipped.fetch_add(1, std::memory_order_relaxed) % 20000) == 0) {
+                    LOG_INFO(HW_GPU, "Semaphore acquires met by queued releases: {}",
+                             skipped.load(std::memory_order_relaxed));
+                }
+                return;
+            }
+        }
         // Registered before the fences run, so a release among them that meets the value counts
         // even if a later one overwrites it.
         auto& waiters = Nx2SemaphoreWaiters::Get();
         if (const auto device = dma_pusher.memory_manager.GpuToCpuAddress(acquire.address)) {
             waiters.Add(this, *device, acquire.value, acquire.operation);
         }
-        // EDEN_NX2_ACQUIRE_NOWAIT=1: do not block on a new fence after all recorded work. Submit
-        // what is recorded, take the fences already done, and let the channel wait suspended (the
-        // GPU thread polls it): the release retires when its own fence does, or at once when the
-        // CPU writes it. The blocking wait was 57% of Ocarina's GPU thread at high accuracy.
-        static const bool acquire_nowait = std::getenv("EDEN_NX2_ACQUIRE_NOWAIT") != nullptr;
-        if (acquire_nowait) {
-            VideoCommon::GpuSplit::Get().Run(
-                [rasterizer = dma_pusher.rasterizer] {
-                    rasterizer->FlushCommands();
-                    rasterizer->ReleaseFences(false);
-                },
-                VideoCommon::DrainSite::FenceRelease);
-        } else {
-            ReleaseFences(dma_pusher);
+        ReleaseFences(dma_pusher);
+        // EDEN_NX2_ACQUIRE_TRACE=1: the first acquires that waited, with what met them.
+        if (static const bool acquire_trace = std::getenv("EDEN_NX2_ACQUIRE_TRACE") != nullptr;
+            acquire_trace) {
+            static std::atomic<u32> traced{};
+            if (traced.fetch_add(1, std::memory_order_relaxed) < 200) {
+                LOG_INFO(HW_GPU,
+                         "Acquire waited: channel={} gpu={:#x} op={} value={:#x} after={:#x} "
+                         "latched={}",
+                         dma_pusher.channel_state.bind_id, acquire.address, acquire.operation,
+                         acquire.value, ReadSemaphoreWord(dma_pusher, acquire.address),
+                         waiters.Latched(this));
+            }
         }
         if (!waiters.Latched(this) && !acquire.Matches(ReadSemaphoreWord(dma_pusher, acquire.address))) {
             pending_acquire = acquire;

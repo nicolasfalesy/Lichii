@@ -603,6 +603,26 @@ void QueryCacheBase<Traits>::PopAsyncFlushes() {
     }
 }
 
+template <typename Traits>
+std::optional<u32> QueryCacheBase<Traits>::PendingPayload(VAddr addr) {
+    std::scoped_lock lock(cache_mutex);
+    const auto page = cached_queries.find(addr >> Core::DEVICE_PAGEBITS);
+    if (page == cached_queries.end()) {
+        return std::nullopt;
+    }
+    const auto entry = page->second.find(static_cast<u32>(addr & Core::DEVICE_PAGEMASK));
+    if (entry == page->second.end() ||
+        entry->second.stream_id.Value() != static_cast<u32>(QueryType::Payload)) {
+        return std::nullopt;
+    }
+    const auto* query = impl->ObtainQuery(entry->second);
+    if (query == nullptr || True(query->flags & QueryFlagBits::IsInvalidated) ||
+        True(query->flags & QueryFlagBits::IsRewritten)) {
+        return std::nullopt;
+    }
+    return static_cast<u32>(query->value);
+}
+
 // Invalidation
 
 template <typename Traits>

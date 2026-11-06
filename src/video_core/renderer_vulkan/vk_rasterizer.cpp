@@ -800,11 +800,13 @@ void RasterizerVulkan::Draw(bool is_indexed, u32 instance_count) {
         }
 
         if (mesh_draw) {
-            scheduler.Record([this, groups = draw_params.num_vertices](vk::CommandBuffer cmdbuf) {
+            scheduler.Record([this, groups = draw_params.num_vertices,
+                              hashes = trace_draw_hashes](vk::CommandBuffer cmdbuf) {
                 if (scheduler.GraphicsPipelineMissing()) {
                     return;
                 }
-                cmdbuf.DrawMeshTasksEXT(groups, 1, 1);
+                scheduler.TraceGpuWork(cmdbuf, hashes.first, hashes.second, {groups, 1, 1},
+                                       [&] { cmdbuf.DrawMeshTasksEXT(groups, 1, 1); });
             });
             return;
         }
@@ -1601,6 +1603,10 @@ bool RasterizerVulkan::MustFlushRegion(DAddr addr, u64 size, VideoCommon::CacheT
 
 bool RasterizerVulkan::HasPendingQueries(DAddr addr, u64 size) {
     return query_cache.IsRegionGpuModified(addr, size);
+}
+
+std::optional<u32> RasterizerVulkan::PendingSemaphoreRelease(DAddr addr) {
+    return query_cache.PendingPayload(addr);
 }
 
 VideoCore::RasterizerDownloadArea RasterizerVulkan::GetFlushArea(DAddr addr, u64 size) {

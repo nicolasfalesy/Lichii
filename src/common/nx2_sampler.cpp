@@ -200,6 +200,23 @@ struct Symbolizer {
         return it->second;
     }
 
+    /// "module+0xoffset" for a frame without a symbol, for offline symbolizing (.folded).
+    std::string Offset(DWORD64 address) {
+        HMODULE module{};
+        if (!GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                                    GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                                reinterpret_cast<LPCSTR>(address), &module)) {
+            return "(jit)";
+        }
+        char path[MAX_PATH] = "?";
+        GetModuleFileNameA(module, path, sizeof(path));
+        const char* base = std::strrchr(path, '\\');
+        char text[MAX_PATH + 32];
+        std::snprintf(text, sizeof(text), "%s+0x%llx", base != nullptr ? base + 1 : path,
+                      static_cast<unsigned long long>(address - reinterpret_cast<DWORD64>(module)));
+        return text;
+    }
+
     SymFromAddrFn from_address{};
     std::unordered_map<DWORD64, std::string> cache;
 };
@@ -316,7 +333,8 @@ std::string Report(const std::vector<Target>& targets, const std::vector<Sample>
         std::string line = targets[sample.thread].name;
         for (unsigned i = sample.depth; i-- > 0;) {
             line += ';';
-            line += symbolizer.Name(sample.frames[i]);
+            const std::string& name = symbolizer.Name(sample.frames[i]);
+            line += name.ends_with("!?") ? symbolizer.Offset(sample.frames[i]) : name;
         }
         ++folded[line];
     }
