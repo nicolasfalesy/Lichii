@@ -283,7 +283,11 @@ std::optional<VideoCore::RasterizerDownloadArea> BufferCache<P>::GetFlushArea(DA
                                            device_addr_end_aligned - device_addr_start_aligned);
     // A preflushable mark persists and downloads later GPU writes at every fence. Native titles
     // instead keep read traps and flush on demand.
-    const bool preflush = !Tegra::g_nx2_ampere.load(std::memory_order_relaxed);
+    // EDEN_NX2_PREFLUSH=1 uses preflushable marks on Switch 2 titles too. Ocarina of Time on an
+    // Intel Arc B390 read-trapped ~400 times a second, each a full GPU wait (530 ms of every
+    // second); preflushed, the exposure stays right and gameplay went from 17 to 24 fps.
+    static const bool nx2_preflush = std::getenv("EDEN_NX2_PREFLUSH") != nullptr;
+    const bool preflush = nx2_preflush || !Tegra::g_nx2_ampere.load(std::memory_order_relaxed);
     if (!area->preemtive) {
         if (Nx2DownloadTrace::g_enabled) [[unlikely]] {
             Nx2DownloadTrace::Marked(device_addr_start_aligned,

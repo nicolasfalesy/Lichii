@@ -121,4 +121,50 @@ inline bool ValidPair(const Tegra::Texture::TICEntry& input,
 // A successful substitute dispatch, not a shader rejection. Never cache it as a failure.
 struct DispatchReplaced {};
 
+// Ocarina of Time's title movie: an AV1 frame (1080p A8B8G8R8) goes through a 12-dispatch
+// tensor network and an output pass that writes the 1440p image. Translated, the network costs
+// ~130 ms a frame on an Intel Arc B390 (its programs spill up to 22 KB of scratch at the 32-wide
+// subgroup HMMA needs) and tints the movie purple with vertical stripes, so a bilinear upscale of
+// the movie frame stands in for the whole chain. Native program keys of build b06d1818.
+namespace Ocarina {
+constexpr u64 ProgramId = 0x0400486024DEC000ULL;
+constexpr std::array<u64, 9> NetworkProgramKeys{
+    0x2f5791cea2a85397ULL, 0x313d724f3e214203ULL, 0xdf2c83cf2ad70790ULL,
+    0x1fdb95ea2565f49cULL, 0x0be2f024aea21a6cULL, 0x0618cc4a3ac8f33aULL,
+    0xe27336d38f1cc8f4ULL, 0xecebb02dec6faa17ULL, 0x2a366b38546a4d5eULL,
+};
+constexpr u64 OutputProgramKey = 0x6093c9143ba0904dULL;
+// The network's last pass samples the movie frame at constant bank 0 + 0x70 (and writes its
+// 1080p A2B10G10R10 result, which the output pass dithers into the 1440p A8B8G8R8 image at
+// + 0xc8 with a 512x512 noise texture).
+constexpr u64 FramePassProgramKey = 0x2a366b38546a4d5eULL;
+constexpr u32 FrameOffset = 0x70;
+constexpr u32 OutputOffset = 0xc8;
+
+constexpr bool IsNetworkProgram(u64 native_key) {
+    for (const u64 key : NetworkProgramKeys) {
+        if (key == native_key) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// Not PlainImage: the output's descriptor reads base layer 32 although it is a single 2D image
+// (texture type 2D, depth 1), and the frame dump finds it at that address as layer 0.
+inline bool ValidMovieFrame(const Tegra::Texture::TICEntry& image) {
+    using namespace Tegra::Texture;
+    return (image.texture_type == TextureType::Texture2D ||
+            image.texture_type == TextureType::Texture2DNoMipmap) &&
+           image.IsBlockLinear() && image.Depth() == 1 && image.max_mip_level == 0 &&
+           image.Address() != 0 && image.format == TextureFormat::A8B8G8R8;
+}
+
+inline bool ValidPair(const Tegra::Texture::TICEntry& input, const Tegra::Texture::TICEntry& output) {
+    return ValidMovieFrame(input) && ValidMovieFrame(output) &&
+           input.Address() != output.Address() && output.Width() >= input.Width() &&
+           output.Height() >= input.Height();
+}
+} // namespace Ocarina
+
 } // namespace VideoCommon::FireEmblemUpscale

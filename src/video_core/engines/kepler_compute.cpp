@@ -1077,6 +1077,100 @@ bool KeplerCompute::TryFireEmblemUpscale(bool allow_history) {
     return done;
 }
 
+bool KeplerCompute::ProcessOcarinaMovie(u64 native_key) {
+    namespace Ocarina = VideoCommon::FireEmblemUpscale::Ocarina;
+    // EDEN_NX2_OCARINA_MOVIE=native keeps the game's network, for comparisons.
+    static const bool native = [] {
+        const char* const option = std::getenv("EDEN_NX2_OCARINA_MOVIE");
+        return option && std::string_view{option} == "native";
+    }();
+    if (native) {
+        return false;
+    }
+    if (native_key == Ocarina::FramePassProgramKey) {
+        ocarina_movie_frame = ReadComputeImage(Ocarina::FrameOffset);
+    }
+    if (native_key == Ocarina::OutputProgramKey) {
+        ocarina_movie_replaced = TryOcarinaMovieUpscale();
+        return ocarina_movie_replaced;
+    }
+    return ocarina_movie_replaced && Ocarina::IsNetworkProgram(native_key);
+}
+
+std::optional<Texture::TICEntry> KeplerCompute::ReadComputeImage(u32 cbuf0_offset) const {
+    const auto& cbuf = launch_description.const_buffer_config[0];
+    const GPUVAddr address = (GPUVAddr{cbuf.address_high} << 32) | cbuf.address_low;
+    if (!(launch_description.const_buffer_enable_mask & 1) ||
+        cbuf.size.Value() < cbuf0_offset + sizeof(u32) ||
+        !memory_manager.IsFullyMappedRange(address + cbuf0_offset, sizeof(u32))) {
+        return std::nullopt;
+    }
+    const u32 index = memory_manager.Read<u32>(address + cbuf0_offset) & 0xfffff;
+    if (index > regs.tic.limit || !memory_manager.IsFullyMappedRange(
+            regs.tic.Address() + u64{index} * sizeof(Texture::TICEntry), sizeof(Texture::TICEntry))) {
+        return std::nullopt;
+    }
+    return GetTICEntry(index);
+}
+
+bool KeplerCompute::TryOcarinaMovieUpscale() {
+    namespace Ocarina = VideoCommon::FireEmblemUpscale::Ocarina;
+    const auto input = std::exchange(ocarina_movie_frame, std::nullopt);
+    const auto output = ReadComputeImage(Ocarina::OutputOffset);
+    static u32 logged{};
+    if (!input || !output || !Ocarina::ValidPair(*input, *output)) {
+        if (logged++ < 4) {
+            const auto describe = [](const std::optional<Texture::TICEntry>& tic) {
+                return tic ? fmt::format("{:#x} {}x{} format {:#x} type {} block_linear {} depth {} "
+                                         "layer {} mips {}", tic->Address(), tic->Width(),
+                                         tic->Height(), static_cast<u32>(tic->format.Value()),
+                                         static_cast<u32>(tic->texture_type.Value()),
+                                         tic->IsBlockLinear(), tic->Depth(), tic->BaseLayer(),
+                                         static_cast<u32>(tic->max_mip_level.Value()))
+                           : std::string{"none"};
+            };
+            LOG_WARNING(HW_GPU, "Ocarina movie upscale: no valid pair (frame: {}, output: {}); "
+                        "the game's network runs", describe(input), describe(output));
+        }
+        return false;
+    }
+    const auto surface = [](const Texture::TICEntry& tic) {
+        Fermi2D::Surface result{};
+        result.format = Tegra::RenderTargetFormat::A8B8G8R8_UNORM;
+        result.linear = Fermi2D::MemoryLayout::BlockLinear;
+        result.block_width.Assign(tic.block_width);
+        result.block_height.Assign(tic.block_height);
+        result.block_depth.Assign(tic.block_depth);
+        result.depth = 1;
+        result.width = tic.Width();
+        result.height = tic.Height();
+        result.addr_upper = static_cast<u32>(tic.Address() >> 32);
+        result.addr_lower = static_cast<u32>(tic.Address());
+        return result;
+    };
+    const Fermi2D::Config copy{
+        .operation = Fermi2D::Operation::SrcCopy,
+        .filter = Fermi2D::Filter::Bilinear,
+        .must_accelerate = true,
+        .dst_x0 = 0,
+        .dst_y0 = 0,
+        .dst_x1 = static_cast<s32>(output->Width()),
+        .dst_y1 = static_cast<s32>(output->Height()),
+        .src_x0 = 0,
+        .src_y0 = 0,
+        .src_x1 = static_cast<s32>(input->Width()),
+        .src_y1 = static_cast<s32>(input->Height()),
+    };
+    const bool done = rasterizer->AccelerateSurfaceCopy(surface(*input), surface(*output), copy);
+    if (logged++ < 4) {
+        LOG_INFO(HW_GPU, "Ocarina movie upscale: {} input={:#x} {}x{} output={:#x} {}x{}",
+                 done ? "applied" : "unavailable; the game's network runs", input->Address(),
+                 input->Width(), input->Height(), output->Address(), output->Width(),
+                 output->Height());
+    }
+    return done;
+}
+
 void KeplerCompute::ProcessLaunch() {
     const GPUVAddr launch_desc_loc = regs.launch_desc_loc.Address();
     memory_manager.ReadBlockUnsafe(launch_desc_loc, &launch_description,

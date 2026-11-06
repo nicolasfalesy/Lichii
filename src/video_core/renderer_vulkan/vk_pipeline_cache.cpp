@@ -1036,6 +1036,13 @@ void PipelineCache::QueueVulkanPipelineCacheFlush() {
     if (!use_vulkan_pipeline_cache || vulkan_pipeline_cache_filename.empty()) {
         return;
     }
+    // Intel's Windows driver (101.8991, Arc B390) dereferences null in vkGetPipelineCacheData
+    // while other threads build pipelines into the same cache: Ocarina crashed entering Kokiri
+    // Forest. The cache is still saved after the boot-time load and at shutdown, when no build
+    // runs.
+    if (device.GetDriverID() == VK_DRIVER_ID_INTEL_PROPRIETARY_WINDOWS) {
+        return;
+    }
     if (++pipelines_since_flush < VULKAN_CACHE_FLUSH_PIPELINES) {
         return;
     }

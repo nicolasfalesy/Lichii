@@ -290,6 +290,11 @@ const ShaderInfo* ShaderCache::ComputeShader() {
         kepler_compute->TraceDlssContract(shader->lowered_native->native_program_key);
     }
     if (kepler_compute->IsNativeMode() && shader->lowered_native &&
+        program_id == FireEmblemUpscale::Ocarina::ProgramId &&
+        kepler_compute->ProcessOcarinaMovie(shader->lowered_native->native_program_key)) {
+        throw FireEmblemUpscale::DispatchReplaced{};
+    }
+    if (kepler_compute->IsNativeMode() && shader->lowered_native &&
         kepler_compute->ProcessGameDlss(program_id, shader->lowered_native->native_program_key)) {
         throw FireEmblemUpscale::DispatchReplaced{};
     }

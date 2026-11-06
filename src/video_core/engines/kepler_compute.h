@@ -253,6 +253,9 @@ public:
 
     bool IsNativeMode() const { return native_mode; }
     bool ProcessGameDlss(u64 program_id, u64 native_key);
+    /// Ocarina of Time's title movie network: whether this dispatch is replaced (see
+    /// FireEmblemUpscale::Ocarina).
+    bool ProcessOcarinaMovie(u64 native_key);
     void TraceDlssContract(u64 native_key, bool warn_unvalidated = true);
 
     /// GPU thread split with macros on its front half (gpu_split.h, EDEN_NX2_SPLIT=2), called by
@@ -280,6 +283,13 @@ private:
     void DescribeNativeResources(const NativeQmdScheduler::Descriptor& qmd);
     void RememberDlssMotionVectors();
     bool TryFireEmblemUpscale(bool allow_history = true);
+    bool TryOcarinaMovieUpscale();
+    std::optional<Texture::TICEntry> ReadComputeImage(u32 cbuf0_offset) const;
+    /// The movie frame this evaluation's network reads, taken at its last pass.
+    std::optional<Texture::TICEntry> ocarina_movie_frame;
+    /// The last output pass was replaced, so the next evaluation's network passes are skipped.
+    /// A failed replacement runs the next evaluation natively.
+    bool ocarina_movie_replaced{};
     void CaptureFireEmblemJitter();
     bool FinishDlssEvaluation();
     void CheckDlssNetwork();
