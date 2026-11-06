@@ -278,6 +278,13 @@ struct Info {
 
     bool is_task{}; ///< Switch 2 task program (Stage::Task)
     bool is_mesh{}; ///< Switch 2 mesh program (Stage::Mesh)
+
+    /// Whether the program observes the warp size (lane ids, votes, shuffles), so the host must
+    /// run it with the guest's 32-wide subgroups.
+    bool UsesWarpOps() const {
+        return uses_subgroup_vote || uses_subgroup_invocation_id || uses_subgroup_shuffles ||
+               uses_subgroup_mask || uses_quad_shuffles || uses_fswzadd;
+    }
     bool uses_workgroup_id{};
     bool uses_local_invocation_id{};
     bool uses_invocation_id{};

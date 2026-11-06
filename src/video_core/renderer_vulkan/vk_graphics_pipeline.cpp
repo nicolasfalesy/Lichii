@@ -1220,7 +1220,7 @@ void GraphicsPipeline::MakePipeline(VkRenderPass render_pass) {
         .dynamicStateCount = static_cast<u32>(dynamic_states.size()),
         .pDynamicStates = dynamic_states.data(),
     };
-    [[maybe_unused]] const VkPipelineShaderStageRequiredSubgroupSizeCreateInfoEXT subgroup_size_ci{
+    const VkPipelineShaderStageRequiredSubgroupSizeCreateInfoEXT subgroup_size_ci{
         .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_REQUIRED_SUBGROUP_SIZE_CREATE_INFO_EXT,
         .pNext = nullptr,
         .requiredSubgroupSize = GuestWarpSize,
@@ -1230,7 +1230,7 @@ void GraphicsPipeline::MakePipeline(VkRenderPass render_pass) {
         if (!spv_modules[stage]) {
             continue;
         }
-        [[maybe_unused]] auto& stage_ci =
+        auto& stage_ci =
             shader_stages.emplace_back(VkPipelineShaderStageCreateInfo{
                 .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
                 .pNext = nullptr,
@@ -1241,6 +1241,22 @@ void GraphicsPipeline::MakePipeline(VkRenderPass render_pass) {
                 .pName = "main",
                 .pSpecializationInfo = nullptr,
             });
+        // Mesh and task programs written for the guest treat their 32 invocations as one warp:
+        // lane ids, ballots, and lane 0 writing shared counts. Intel runs them as SIMD16 unless
+        // told otherwise, so two "lane 0"s race on shared memory and meshlets come out scrambled
+        // (Ocarina's ivy moved every frame). Force the guest warp size where the driver allows.
+        // EDEN_NX2_MESH_WARP32=0 opts out (for A/B timing).
+        static const bool mesh_warp32 = [] {
+            const char* value = std::getenv("EDEN_NX2_MESH_WARP32");
+            return value == nullptr || value[0] != '0';
+        }();
+        const bool mesh_stage = stage_ci.stage == VK_SHADER_STAGE_MESH_BIT_EXT ||
+                                stage_ci.stage == VK_SHADER_STAGE_TASK_BIT_EXT;
+        if (mesh_warp32 && mesh_stage && stage_infos[stage].UsesWarpOps() &&
+            device.IsExtSubgroupSizeControlSupported() &&
+            device.IsGuestWarpSizeSupported(stage_ci.stage)) {
+            stage_ci.pNext = &subgroup_size_ci;
+        }
     }
     VkPipelineCreateFlags flags{};
     if (device.IsKhrPipelineExecutablePropertiesEnabled() && Settings::values.renderer_debug.GetValue()) {
