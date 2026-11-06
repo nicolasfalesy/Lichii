@@ -19,6 +19,7 @@
 #include "video_core/gpu.h"
 #include "video_core/gpu_thread.h"
 #include "video_core/gpu_split.h"
+#include "video_core/nx2.h"
 #include "video_core/nx2_profile.h"
 #include "video_core/host1x/host1x.h"
 #include "video_core/renderer_base.h"
@@ -79,7 +80,8 @@ void ThreadManager::StartThread(VideoCore::RendererBase& renderer, Core::Fronten
                         std::chrono::microseconds{500}) {
                         std::this_thread::yield();
                     } else {
-                        std::this_thread::sleep_for(std::chrono::milliseconds{1});
+                        // Woken early when a GPU release latches a waiting channel.
+                        Tegra::Nx2SemaphoreWaiters::Get().WaitForLatch(std::chrono::milliseconds{1});
                     }
                     continue;
                 }

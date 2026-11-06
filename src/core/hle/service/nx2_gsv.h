@@ -2169,7 +2169,18 @@ private:
             const char* value = std::getenv("EDEN_NX2_FRAME_CAPTURE_EVERY");
             return value != nullptr ? (std::max)(u64{1}, static_cast<u64>(std::strtoull(value, nullptr, 10))) : u64{120};
         }();
-        if (directory == nullptr || (m_presents % every) != 1 % every || m_capture_pending->exchange(true)) {
+        // EDEN_NX2_FRAME_CAPTURE_FROM / _COUNT: only presents in [from, from + count), so every
+        // frame of a few seconds of gameplay can be saved to check for flicker.
+        static const u64 from = [] {
+            const char* value = std::getenv("EDEN_NX2_FRAME_CAPTURE_FROM");
+            return value != nullptr ? static_cast<u64>(std::strtoull(value, nullptr, 10)) : u64{0};
+        }();
+        static const u64 count = [] {
+            const char* value = std::getenv("EDEN_NX2_FRAME_CAPTURE_COUNT");
+            return value != nullptr ? static_cast<u64>(std::strtoull(value, nullptr, 10)) : ~u64{0};
+        }();
+        if (directory == nullptr || m_presents < from || m_presents - from >= count ||
+            (m_presents % every) != 1 % every || m_capture_pending->exchange(true)) {
             return;
         }
         const auto layout = Layout::DefaultFrameLayout(1280, 720);

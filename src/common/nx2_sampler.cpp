@@ -278,6 +278,31 @@ std::string Report(const std::vector<Target>& targets, const std::vector<Sample>
         }
         print("self <- caller", self_caller, 50);
         print("inclusive (on the stack)", inclusive, 90);
+        // The first three frames inside the executable, as offsets for llvm-symbolizer: MinGW
+        // builds carry DWARF, which dbghelp cannot read, so the names above stop at "?".
+        {
+            const auto exe = reinterpret_cast<DWORD64>(GetModuleHandleA(nullptr));
+            std::map<std::string, unsigned> own;
+            for (const Sample& sample : samples) {
+                if (sample.thread != thread || sample.depth == 0) {
+                    continue;
+                }
+                std::string chain;
+                unsigned found = 0;
+                for (unsigned i = 0; i < sample.depth && found < 3; ++i) {
+                    HMODULE module{};
+                    if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                                               GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                                           reinterpret_cast<LPCSTR>(sample.frames[i]), &module) &&
+                        reinterpret_cast<DWORD64>(module) == exe) {
+                        chain += fmt::format("{}{:#x}", found ? " <- " : "", sample.frames[i] - exe);
+                        ++found;
+                    }
+                }
+                ++own[found ? chain : std::string{"(none)"}];
+            }
+            print("first executable frames (offsets)", own, 60);
+        }
         text += "\n";
     }
     if (std::FILE* const file = std::fopen(path, "w")) {

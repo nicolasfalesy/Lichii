@@ -265,7 +265,21 @@ void Puller::ProcessSemaphoreTriggerMethod(DmaPusher& dma_pusher) {
         if (const auto device = dma_pusher.memory_manager.GpuToCpuAddress(acquire.address)) {
             waiters.Add(this, *device, acquire.value, acquire.operation);
         }
-        ReleaseFences(dma_pusher);
+        // EDEN_NX2_ACQUIRE_NOWAIT=1: do not block on a new fence after all recorded work. Submit
+        // what is recorded, take the fences already done, and let the channel wait suspended (the
+        // GPU thread polls it): the release retires when its own fence does, or at once when the
+        // CPU writes it. The blocking wait was 57% of Ocarina's GPU thread at high accuracy.
+        static const bool acquire_nowait = std::getenv("EDEN_NX2_ACQUIRE_NOWAIT") != nullptr;
+        if (acquire_nowait) {
+            VideoCommon::GpuSplit::Get().Run(
+                [rasterizer = dma_pusher.rasterizer] {
+                    rasterizer->FlushCommands();
+                    rasterizer->ReleaseFences(false);
+                },
+                VideoCommon::DrainSite::FenceRelease);
+        } else {
+            ReleaseFences(dma_pusher);
+        }
         if (!waiters.Latched(this) && !acquire.Matches(ReadSemaphoreWord(dma_pusher, acquire.address))) {
             pending_acquire = acquire;
             dma_pusher.suspensions.fetch_add(1, std::memory_order_release);

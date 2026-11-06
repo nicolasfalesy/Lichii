@@ -8,6 +8,7 @@
 #include <atomic>
 #include <functional>
 #include <map>
+#include <condition_variable>
 #include <mutex>
 #include <utility>
 #include <vector>
@@ -371,12 +372,28 @@ public:
         if (count.load(std::memory_order_acquire) == 0) {
             return;
         }
-        std::scoped_lock lk{mutex};
-        for (auto& w : waiters) {
-            if (w.address == device_address && !w.latched && Matches(w, value)) {
-                w.latched = true;
+        bool latched = false;
+        {
+            std::scoped_lock lk{mutex};
+            for (auto& w : waiters) {
+                if (w.address == device_address && !w.latched && Matches(w, value)) {
+                    w.latched = true;
+                    latched = true;
+                }
             }
         }
+        if (latched) {
+            latch_cv.notify_all();
+        }
+    }
+
+    /// Sleeps until a write latches a waiter, or for `timeout` (CPU releases are not seen here).
+    template <typename Duration>
+    void WaitForLatch(Duration timeout) {
+        std::unique_lock lk{mutex};
+        latch_cv.wait_for(lk, timeout, [this] {
+            return std::ranges::any_of(waiters, [](const Waiter& w) { return w.latched; });
+        });
     }
 
 private:
@@ -387,6 +404,8 @@ private:
         u32 operation;
         bool latched;
     };
+
+    std::condition_variable latch_cv;
 
     static bool Matches(const Waiter& w, u32 current) {
         switch (w.operation) {
