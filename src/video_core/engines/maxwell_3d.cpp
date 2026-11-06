@@ -879,28 +879,6 @@ void Maxwell3D::ProcessQueryCondition() {
         break;
     }
     }
-    // EDEN_NX2_COND_STATS=1: CPU-evaluated conditions by mode and result, every 10 s.
-    static const bool cond_stats = std::getenv("EDEN_NX2_COND_STATS") != nullptr;
-    if (cond_stats) {
-        static std::array<u64, 16> skipped{}, drawn{};
-        static auto last = std::chrono::steady_clock::now();
-        const u32 mode = static_cast<u32>(regs.render_enable_override) * 8 +
-                         (static_cast<u32>(regs.render_enable.mode) & 7);
-        ++(execute_on ? drawn : skipped)[mode & 15];
-        if (const auto now = std::chrono::steady_clock::now(); now - last > std::chrono::seconds{10}) {
-            std::string line;
-            for (u32 i = 0; i < 16; ++i) {
-                if (drawn[i] + skipped[i] != 0) {
-                    line += fmt::format(" override{}/mode{}: drawn {} skipped {}", i / 8, i % 8,
-                                        drawn[i], skipped[i]);
-                }
-            }
-            LOG_INFO(HW_GPU, "CPU conditions in 10 s:{}", line);
-            drawn.fill(0);
-            skipped.fill(0);
-            last = now;
-        }
-    }
     if (const u64 trace =
             VideoCommon::QueryTrace::Sample(VideoCommon::QueryTrace::Event::CpuCondition)) {
         LOG_INFO(HW_GPU,

@@ -1448,39 +1448,6 @@ void MacroEngine::Execute(Core::System& system, Engines::Maxwell3D& maxwell3d, u
                         VideoCommon::QueryDma::FlushPending(memory, maxwell3d.Rasterizer(), source,
                                                             read_bytes);
                     }
-                    // EDEN_NX2_MME_DMA_SYNC=1 (experiment): wait for all GPU work before every
-                    // macro DMA read, so the read cannot see words the GPU has not written yet.
-                    static const bool full_sync = std::getenv("EDEN_NX2_MME_DMA_SYNC") != nullptr;
-                    if (full_sync && owns_caches) {
-                        maxwell3d.Rasterizer().ReleaseFences(true);
-                        for (GPUVAddr page = source & ~GPUVAddr{0xfff}; page < source + read_bytes;
-                             page += 0x1000) {
-                            if (const auto device = memory.GpuToCpuAddress(page)) {
-                                maxwell3d.Rasterizer().FlushRegion(*device, 0x1000,
-                                                                   VideoCommon::CacheType::All);
-                            }
-                        }
-                    }
-                    // EDEN_NX2_COND_STATS=1: macro DMA reads, synced reads and all-zero reads.
-                    static const bool dma_stats = std::getenv("EDEN_NX2_COND_STATS") != nullptr;
-                    if (dma_stats) {
-                        static u64 reads{}, dirty{}, zero{};
-                        static auto last = std::chrono::steady_clock::now();
-                        ++reads;
-                        dirty += memory.IsMemoryDirty(source, read_bytes,
-                                                      VideoCommon::CacheType::BufferCache);
-                        std::array<u32, 4> head{};
-                        memory.ReadBlockUnsafe(source, head.data(),
-                                               (std::min)(read_bytes, sizeof(head)));
-                        zero += head[0] == 0 && head[1] == 0 && head[2] == 0 && head[3] == 0;
-                        if (const auto now = std::chrono::steady_clock::now();
-                            now - last > std::chrono::seconds{10}) {
-                            LOG_INFO(HW_GPU, "Macro DMA reads in 10 s: {} reads, {} GPU-dirty, {} all zero",
-                                     reads, dirty, zero);
-                            reads = dirty = zero = 0;
-                            last = now;
-                        }
-                    }
                     if (memory.IsMemoryDirty(source, read_bytes, VideoCommon::CacheType::BufferCache)) {
                         memory.FlushRegion(source, read_bytes, VideoCommon::CacheType::BufferCache);
                         static u64 flushes{};

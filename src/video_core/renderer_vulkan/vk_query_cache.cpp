@@ -1493,24 +1493,6 @@ void QueryCacheRuntime::HostConditionalRenderingCompareBCImpl(DAddr address, boo
 
 void QueryCacheRuntime::TraceConditionalRendering(const char* path, bool handled, DAddr address,
                                                  DAddr address_2) {
-    // EDEN_NX2_COND_STATS=1: how often each conditional-rendering path runs, every 10 s.
-    static const bool stats = std::getenv("EDEN_NX2_COND_STATS") != nullptr;
-    if (stats) {
-        static std::mutex stats_mutex;
-        static std::map<std::string, u64> counts;
-        static auto last = std::chrono::steady_clock::now();
-        std::scoped_lock lock{stats_mutex};
-        ++counts[path];
-        if (const auto now = std::chrono::steady_clock::now(); now - last > std::chrono::seconds{10}) {
-            std::string line;
-            for (const auto& [name, count] : counts) {
-                line += fmt::format(" {}={}", name, count);
-            }
-            LOG_INFO(Render_Vulkan, "Conditional rendering paths in 10 s:{}", line);
-            counts.clear();
-            last = now;
-        }
-    }
     if (const u64 trace =
             VideoCommon::QueryTrace::Sample(VideoCommon::QueryTrace::Event::VulkanCondition)) {
         const auto* engine = impl->maxwell3d;
