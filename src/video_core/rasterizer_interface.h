@@ -121,6 +121,13 @@ public:
     /// Switch 2: the front flushed this command list page with the split drained.
     virtual void NoteGpuWrittenCommandListSynced([[maybe_unused]] DAddr page) {}
 
+    /// Overlays the GPU's not yet downloaded writes to `out` (guest memory, within one 4 KiB
+    /// page) from the page's copy, without waiting for later work. False if it can't.
+    virtual bool OverlayGpuWrittenCommandList([[maybe_unused]] DAddr addr,
+                                              [[maybe_unused]] std::span<u8> out) {
+        return false;
+    }
+
     virtual void FlushGpuWrittenCommandListPages(std::span<const DAddr> pages) {
         for (const DAddr page : pages) {
             FlushRegion(page, 0x1000, VideoCommon::CacheType::BufferCache);

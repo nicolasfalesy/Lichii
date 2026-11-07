@@ -2193,6 +2193,63 @@ auto BufferCache<P>::Nx2ReadListCopy(DAddr device_addr, std::span<u8> out, bool 
 }
 
 template <class P>
+bool BufferCache<P>::Nx2OverlayListCopy(DAddr device_addr, std::span<u8> out) {
+    if constexpr (IS_OPENGL) {
+        return false;
+    } else {
+        constexpr DAddr page_size = DAddr{1} << Tegra::Nx2WrittenPageBits;
+        const DAddr page = device_addr & ~(page_size - 1);
+        if (device_addr - page + out.size() > page_size) {
+            return false;
+        }
+        boost::container::small_vector<std::pair<DAddr, DAddr>, 8> ranges;
+        {
+            std::scoped_lock lock{mutex};
+            gpu_modified_ranges.ForEachInRange(device_addr, out.size(),
+                                               [&](DAddr start, DAddr end) {
+                                                   ranges.emplace_back(start, end);
+                                               });
+        }
+        if (ranges.empty()) {
+            return true;
+        }
+        const auto current = [&](const Nx2ListPage& entry) {
+            if (!entry.copy || entry.draw_written || entry.copy_writes != entry.writes) {
+                return false;
+            }
+            return std::ranges::all_of(ranges, [&](const auto& range) {
+                return range.first - page >= entry.copy_begin &&
+                       range.second - page <= entry.copy_end;
+            });
+        };
+        u64 tick{};
+        u64 writes{};
+        {
+            std::scoped_lock lock{nx2_list_mutex};
+            const auto it = nx2_list_pages.find(page);
+            if (it == nx2_list_pages.end() || !current(it->second)) {
+                return false;
+            }
+            tick = it->second.copy_tick;
+            writes = it->second.copy_writes;
+        }
+        // Waits only for the work up to the copy (submitted with its writer), not for all of it.
+        runtime.WaitSubmittedTick(tick);
+        std::scoped_lock lock{nx2_list_mutex};
+        const auto it = nx2_list_pages.find(page);
+        if (it == nx2_list_pages.end() || !current(it->second) || it->second.copy_tick != tick ||
+            it->second.copy_writes != writes) {
+            return false;
+        }
+        const u8* const copy = it->second.copy->mapped_span.data();
+        for (const auto& [start, end] : ranges) {
+            std::memcpy(out.data() + (start - device_addr), copy + (start - page), end - start);
+        }
+        return true;
+    }
+}
+
+template <class P>
 void BufferCache<P>::Nx2NoteListSynced(DAddr page) {
     if constexpr (!IS_OPENGL) {
         std::scoped_lock lock{nx2_list_mutex};

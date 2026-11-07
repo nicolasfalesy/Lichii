@@ -1554,6 +1554,17 @@ void RasterizerVulkan::NoteGpuWrittenCommandListSynced(DAddr page) {
     buffer_cache.Nx2NoteListSynced(page);
 }
 
+bool RasterizerVulkan::OverlayGpuWrittenCommandList(DAddr addr, std::span<u8> out) {
+    // As FlushRegion does: the guest's collected writes there win over the GPU's (applying them
+    // takes their bytes out of the GPU-modified ranges), so apply them first, or the copy would
+    // overwrite newer CPU data in `out` (guest memory, which already holds those writes).
+    if (gpu.HasPendingCPUWrites(addr, out.size())) {
+        ++Tegra::g_nx2_overlay_cpu_writes;
+        gpu.InvalidateGPUCache();
+    }
+    return buffer_cache.Nx2OverlayListCopy(addr, out);
+}
+
 void RasterizerVulkan::FlushGpuWrittenCommandListPages(std::span<const DAddr> pages) {
     gpu.InvalidateGPUCache();
     std::scoped_lock lock{buffer_cache.mutex};
@@ -1818,6 +1829,18 @@ void RasterizerVulkan::WaitForIdle() {
 
     query_cache.NotifyWFI();
 
+    // Nothing recorded since the last of these barriers: it would order nothing new, but it would
+    // still end a render pass and drain the GPU's pipeline. Ocarina meets ~2,000 semaphore
+    // acquires a second with one (puller), often several in a row. EDEN_NX2_WFI_COALESCE=0 off.
+    static const bool coalesce = [] {
+        const char* value = std::getenv("EDEN_NX2_WFI_COALESCE");
+        return value == nullptr || value[0] != '0';
+    }();
+    if (coalesce && scheduler.RecordCount() == wfi_record_count) {
+        ++wfi_coalesced;
+        return;
+    }
+
     if (device.IsMoltenVK() && scheduler.IsRenderPassActive()) {
         scheduler.DeferFragmentBarrier();
         fence_manager.SignalOrdering();
@@ -1834,7 +1857,19 @@ void RasterizerVulkan::WaitForIdle() {
         };
         cmdbuf.PipelineBarrier(flags, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, WFI_BARRIER);
     });
+    wfi_record_count = scheduler.RecordCount();
     fence_manager.SignalOrdering();
+    if (static const bool stats = std::getenv("EDEN_NX2_ACQUIRE_STATS") != nullptr; stats) {
+        static u64 barriers{};
+        static auto next = std::chrono::steady_clock::now() + std::chrono::seconds{10};
+        ++barriers;
+        if (const auto now = std::chrono::steady_clock::now(); now >= next) {
+            next = now + std::chrono::seconds{10};
+            LOG_INFO(Render_Vulkan, "WaitForIdle (10 s): {} barriers, {} coalesced", barriers,
+                     std::exchange(wfi_coalesced, 0));
+            barriers = 0;
+        }
+    }
 }
 
 void RasterizerVulkan::FragmentBarrier() {
@@ -1853,6 +1888,16 @@ void RasterizerVulkan::FlushCommands() {
     }
     draw_counter = 0;
     pending_native_work = false;
+    // A fence with downloads or queries comes here right after its own submission: nothing new
+    // to submit then (Ocarina: ~2,100 empty submissions a second at High accuracy).
+    // EDEN_NX2_SKIP_EMPTY_FLUSH=0 off.
+    static const bool skip_empty = [] {
+        const char* value = std::getenv("EDEN_NX2_SKIP_EMPTY_FLUSH");
+        return value == nullptr || value[0] != '0';
+    }();
+    if (skip_empty && !scheduler.HasWorkSinceFlush()) {
+        return;
+    }
     // Fences with downloads or queries come here right after queueing: ~9,400 a second in
     // Hyrule Warriors: Age of Imprisonment fights. Batched like the fences themselves.
     if (!scheduler.DeferFlush()) {

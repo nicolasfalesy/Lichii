@@ -4,8 +4,13 @@
 // SPDX-FileCopyrightText: 2022 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+#include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cstdlib>
+#include <string>
+#include <unordered_map>
+#include <vector>
 
 #include "common/assert.h"
 #include "common/logging.h"
@@ -256,7 +261,9 @@ void Puller::ProcessSemaphoreTriggerMethod(DmaPusher& dma_pusher) {
         }
         VideoCommon::Nx2Profile::Add(VideoCommon::Nx2Profile::Counter::AcquireChecks, 1);
         DrainBack();
-        if (acquire.Matches(ReadSemaphoreWord(dma_pusher, acquire.address))) {
+        // Read before the queued releases below are looked at (Nx2SemaphoreWaiters::PendingAdd).
+        const u32 word_now = ReadSemaphoreWord(dma_pusher, acquire.address);
+        if (acquire.Matches(word_now)) {
             return;
         }
         // A release already queued on the host queue that meets the value: everything recorded
@@ -272,12 +279,23 @@ void Puller::ProcessSemaphoreTriggerMethod(DmaPusher& dma_pusher) {
             lookahead && device) {
             bool met = false;
             VideoCommon::GpuSplit::Get().Run(
-                [&met, &acquire, rasterizer = dma_pusher.rasterizer, address = *device] {
+                [&met, &acquire, word_now, rasterizer = dma_pusher.rasterizer, address = *device] {
                     const auto pending = rasterizer->PendingSemaphoreRelease(address);
                     met = pending && acquire.Matches(*pending);
                     if (!met && acquire.operation == Nx2SemaphoreWaiters::AcquireGequal) {
                         const auto pending_max = Nx2SemaphoreWaiters::Get().PendingMax(address);
                         met = pending_max && *pending_max >= acquire.value;
+                    }
+                    // A completion counter that queued add releases will carry to the value.
+                    // EDEN_NX2_ACQUIRE_ADDS=0 opts out.
+                    static const bool count_adds = [] {
+                        const char* value = std::getenv("EDEN_NX2_ACQUIRE_ADDS");
+                        return value == nullptr || value[0] != '0';
+                    }();
+                    if (!met && count_adds && acquire.operation == Nx2SemaphoreWaiters::AcquireGequal) {
+                        const auto pending_add = Nx2SemaphoreWaiters::Get().PendingAdd(address);
+                        met = pending_add && u64{word_now} + *pending_add >= acquire.value &&
+                              u64{word_now} + *pending_add <= 0xffffffffULL;
                     }
                     if (met) {
                         rasterizer->WaitForIdle();
@@ -299,7 +317,63 @@ void Puller::ProcessSemaphoreTriggerMethod(DmaPusher& dma_pusher) {
         if (const auto device = dma_pusher.memory_manager.GpuToCpuAddress(acquire.address)) {
             waiters.Add(this, *device, acquire.value, acquire.operation);
         }
+        // EDEN_NX2_ACQUIRE_STATS=1: per semaphore word, how often an acquire drains the host GPU,
+        // how long that takes and whether the drain met it.
+        static const bool acquire_stats = std::getenv("EDEN_NX2_ACQUIRE_STATS") != nullptr;
+        const u32 stats_before = acquire_stats ? ReadSemaphoreWord(dma_pusher, acquire.address) : 0;
+        s64 stats_padd = -1;
+        if (acquire_stats) {
+            if (const auto device = dma_pusher.memory_manager.GpuToCpuAddress(acquire.address)) {
+                const auto pending_add = waiters.PendingAdd(*device);
+                stats_padd = pending_add ? static_cast<s64>(*pending_add) : -1;
+            }
+        }
+        const auto stats_start = acquire_stats ? std::chrono::steady_clock::now()
+                                               : std::chrono::steady_clock::time_point{};
         ReleaseFences(dma_pusher);
+        if (acquire_stats) {
+            struct Entry {
+                u64 count{}, met{}, ns{};
+                u32 op{}, value{}, before{}, after{};
+                s64 pending_payload{-1}, pending_max{-1}, pending_add{-1};
+            };
+            static std::unordered_map<u64, Entry> stats;
+            static auto next_report = std::chrono::steady_clock::now() + std::chrono::seconds{10};
+            const auto now = std::chrono::steady_clock::now();
+            const u32 after = ReadSemaphoreWord(dma_pusher, acquire.address);
+            const auto device = dma_pusher.memory_manager.GpuToCpuAddress(acquire.address);
+            Entry& e = stats[device.value_or(acquire.address)];
+            ++e.count;
+            e.met += (waiters.Latched(this) || acquire.Matches(after)) ? 1 : 0;
+            e.ns += static_cast<u64>(std::chrono::duration_cast<std::chrono::nanoseconds>(now - stats_start).count());
+            e.op = acquire.operation;
+            e.value = acquire.value;
+            e.before = stats_before;
+            e.after = after;
+            if (device) {
+                const auto pending = dma_pusher.rasterizer->PendingSemaphoreRelease(*device);
+                e.pending_payload = pending ? s64{*pending} : -1;
+                const auto pending_max = waiters.PendingMax(*device);
+                e.pending_max = pending_max ? s64{*pending_max} : -1;
+                e.pending_add = stats_padd;
+            }
+            if (now >= next_report) {
+                next_report = now + std::chrono::seconds{10};
+                std::vector<std::pair<u64, Entry>> sorted(stats.begin(), stats.end());
+                std::ranges::sort(sorted, std::greater<>{}, [](const auto& p) { return p.second.ns; });
+                std::string text;
+                for (size_t i = 0; i < (std::min<size_t>)(sorted.size(), 10); ++i) {
+                    const auto& [addr, s] = sorted[i];
+                    text += fmt::format(" | {:#x} n={} met={} ms={:.1f} op={} want={:#x} before={:#x} "
+                                        "after={:#x} pend={} pmax={} padd={}",
+                                        addr, s.count, s.met, static_cast<double>(s.ns) / 1e6, s.op,
+                                        s.value, s.before, s.after, s.pending_payload, s.pending_max,
+                                        s.pending_add);
+                }
+                LOG_INFO(HW_GPU, "Acquire drains (10 s):{}", text);
+                stats.clear();
+            }
+        }
         // EDEN_NX2_ACQUIRE_TRACE=1: the first acquires that waited, with what met them.
         if (static const bool acquire_trace = std::getenv("EDEN_NX2_ACQUIRE_TRACE") != nullptr;
             acquire_trace) {

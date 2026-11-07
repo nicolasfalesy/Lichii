@@ -5,6 +5,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <algorithm>
+#include <cstdlib>
 #include <array>
 #include <atomic>
 
@@ -576,6 +577,43 @@ void MemoryManager::WriteWordsCached(GPUVAddr gpu_dest_addr, const u32* words, s
     for (std::size_t i = 0; i < count; ++i) {
         accumulator.Add(gpu_dest_addr + i * sizeof(u32), sizeof(u32));
     }
+}
+
+bool MemoryManager::ReadBlockFromListCopies(GPUVAddr gpu_src_addr, void* dest_buffer,
+                                            std::size_t size) const {
+    static const bool enabled = [] {
+        const char* value = std::getenv("EDEN_NX2_HIGH_LIST_COPY");
+        return value == nullptr || value[0] != '0';
+    }();
+    if (!enabled || rasterizer == nullptr || size == 0 ||
+        !Tegra::g_nx2_ampere.load(std::memory_order_relaxed)) {
+        return false;
+    }
+    const GPUVAddr end = gpu_src_addr + size;
+    u8* const out = static_cast<u8*>(dest_buffer);
+    for (GPUVAddr chunk = gpu_src_addr; chunk < end;) {
+        const GPUVAddr chunk_end = (std::min)(end, (chunk & ~GPUVAddr{0xfff}) + 0x1000);
+        const std::span<u8> part{out + (chunk - gpu_src_addr), static_cast<size_t>(chunk_end - chunk)};
+        const auto device = GpuToCpuAddress(chunk);
+        if (!device || !IsContinuousRange(chunk, part.size())) {
+            return false;
+        }
+        // What the copies can't stand in for: texture writes and pending query reports.
+        if (rasterizer->MustFlushRegion(*device, part.size(), VideoCommon::CacheType::TextureCache) ||
+            rasterizer->HasPendingQueries(*device, part.size())) {
+            return false;
+        }
+        if (Tegra::Nx2IsGpuWritten(*device)) {
+            // From the next GPU write on, the buffer cache copies the page after its writer.
+            Tegra::Nx2MarkCommandListPage(*device);
+        }
+        ReadBlockUnsafe(chunk, part.data(), part.size());
+        if (!rasterizer->OverlayGpuWrittenCommandList(*device, part)) {
+            return false;
+        }
+        chunk = chunk_end;
+    }
+    return true;
 }
 
 void MemoryManager::FlushRegion(GPUVAddr gpu_addr, size_t size,

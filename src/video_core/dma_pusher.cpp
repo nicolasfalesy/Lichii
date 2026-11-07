@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cstdlib>
 #include <cstdio>
 #include <span>
@@ -223,8 +224,45 @@ bool DmaPusher::Step() {
             RecordParsedEntry(header, commands);
             Nx2CmdPageDiag::CountEntry(Nx2CmdPageDiag::Path::Submitted);
             command_resume_offset += ProcessCommands(commands, 0);
+        } else if (use_safe && gpu_written && ReadGpuWrittenCommandsOverlay(
+                                                  dma_state.dma_get, static_cast<u32>(header.size))) {
+            // The words are current as of now, as a safe read's would be: a macro or inline upload
+            // they continue need not read them again (RefreshParameters drained the host GPU for
+            // the 5-word parameter entries Ocarina's GPU culling writes).
+            if (auto* const engine_state = subchannels[dma_state.subchannel]) {
+                engine_state->current_dirty = false;
+            }
+            ++g_nx2_overlay_reads;
+            const std::span<const CommandHeader> commands{command_headers.data(), header.size};
+            RecordParsedEntry(header, commands);
+            Nx2CmdPageDiag::CountEntry(Nx2CmdPageDiag::Path::Copy);
+            command_resume_offset +=
+                ProcessCommands(commands.subspan(command_resume_offset), command_resume_offset);
         } else if (use_safe) {
+            // EDEN_NX2_ACQUIRE_STATS=1: how often and how long safe command list reads stall.
+            static const bool safe_stats = std::getenv("EDEN_NX2_ACQUIRE_STATS") != nullptr;
+            const auto safe_start = safe_stats ? std::chrono::steady_clock::now()
+                                               : std::chrono::steady_clock::time_point{};
             Tegra::Memory::GpuGuestMemory<Tegra::CommandHeader, Tegra::Memory::GuestMemoryFlags::SafeRead>headers(memory_manager, dma_state.dma_get, header.size, &command_headers);
+            if (safe_stats) {
+                static u64 count{}, written{}, slow{}, total_ns{};
+                static auto next_report = std::chrono::steady_clock::now() + std::chrono::seconds{10};
+                const auto now = std::chrono::steady_clock::now();
+                const u64 ns = static_cast<u64>(
+                    std::chrono::duration_cast<std::chrono::nanoseconds>(now - safe_start).count());
+                ++count;
+                written += gpu_written ? 1 : 0;
+                slow += ns > 50'000 ? 1 : 0;
+                total_ns += ns;
+                if (now >= next_report) {
+                    next_report = now + std::chrono::seconds{10};
+                    LOG_INFO(HW_GPU, "Safe command reads (10 s): {} entries, {} on GPU-written pages, "
+                             "{} over 50 us, {:.1f} ms; {} read from list copies ({} after applying CPU writes)",
+                             count, written, slow, static_cast<double>(total_ns) / 1e6,
+                             g_nx2_overlay_reads.exchange(0), g_nx2_overlay_cpu_writes.exchange(0));
+                    count = written = slow = total_ns = 0;
+                }
+            }
             const std::span<const CommandHeader> commands{headers.data(), headers.size()};
             RecordParsedEntry(header, commands);
             Nx2CmdPageDiag::CountEntry(Nx2CmdPageDiag::Path::Safe);
@@ -694,6 +732,17 @@ bool DmaPusher::ReadGpuWrittenCommands(GPUVAddr address, u32 count) {
         chunk = chunk_end;
     }
     return true;
+}
+
+bool DmaPusher::ReadGpuWrittenCommandsOverlay(GPUVAddr address, u32 count) {
+    // A safe read flushes the caches over the list, which drained the host GPU for lists the GPU
+    // writes (Ocarina's, ~1,800 a second at High accuracy, ~20% of the GPU thread).
+    if (count == 0 || VideoCommon::GpuSplit::Get().Active()) {
+        return false;
+    }
+    command_headers.resize_destructive(count);
+    return memory_manager.ReadBlockFromListCopies(address, command_headers.data(),
+                                                  size_t{count} * sizeof(u32));
 }
 
 bool DmaPusher::FlushGpuWrittenCommands(GPUVAddr address, size_t size) {

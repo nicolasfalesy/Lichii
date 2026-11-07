@@ -113,6 +113,14 @@ public:
      * being flushed.
      */
     void ReadBlockUnsafe(GPUVAddr gpu_src_addr, void* dest_buffer, std::size_t size) const;
+
+    /// Reads what ReadBlock would, without draining the host GPU for data the GPU wrote: the
+    /// buffer cache's not yet downloaded writes come from the copies it makes of command list
+    /// pages right after their writer (Ocarina's GPU-written command lists and macro parameters at
+    /// High accuracy). False when it can't (texture or query writes there, no current copy): call
+    /// ReadBlock then. EDEN_NX2_HIGH_LIST_COPY=0 always returns false.
+    [[nodiscard]] bool ReadBlockFromListCopies(GPUVAddr gpu_src_addr, void* dest_buffer,
+                                               std::size_t size) const;
     void WriteBlockUnsafe(GPUVAddr gpu_dest_addr, const void* src_buffer, std::size_t size);
 
     /// Reads `count` consecutive words as Read<u32> would (Switch 2 syncpoint shim included),

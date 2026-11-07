@@ -234,6 +234,9 @@ public:
     /// since. False when not all are current (or the list isn't GPU-written): the caller drains,
     /// flushes and reads guest memory.
     bool ReadGpuWrittenCommands(GPUVAddr address, u32 count);
+    /// High GPU accuracy: reads a list on GPU-written pages as its safe read would, without
+    /// draining the host GPU (BufferCache::Nx2OverlayListCopy). False: read it safely.
+    bool ReadGpuWrittenCommandsOverlay(GPUVAddr address, u32 count);
     /// Brings command list words the GPU wrote (still only in host buffers) to guest memory.
     bool FlushGpuWrittenCommands(GPUVAddr address, size_t size);
 

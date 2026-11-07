@@ -183,6 +183,7 @@ public:
         if (VideoCommon::GpuSplit::check_owner) [[unlikely]] {
             VideoCommon::GpuSplit::CheckOwner("Scheduler::Record");
         }
+        ++record_count;
         if (chunk->Record(command)) {
             return;
         }
@@ -209,6 +210,17 @@ public:
             std::this_thread::sleep_for(std::chrono::microseconds{100});
         }
         return true;
+    }
+
+    /// Commands recorded so far (only the recording thread reads it).
+    [[nodiscard]] u64 RecordCount() const noexcept {
+        return record_count;
+    }
+
+    /// Whether anything was recorded (or a clear deferred) since the last Flush: a Flush with
+    /// nothing new still submits two command buffers and a barrier.
+    [[nodiscard]] bool HasWorkSinceFlush() const noexcept {
+        return record_count != flush_record_count || deferred_clear.framebuffer != nullptr;
     }
 
     /// Returns the current command buffer tick.
@@ -446,6 +458,9 @@ private:
     StateTracker& state_tracker;
 
     std::unique_ptr<MasterSemaphore> master_semaphore;
+
+    u64 record_count{};
+    u64 flush_record_count{~u64{0}}; ///< record_count right after the last Flush
     FragmentBarrierState fragment_barrier;
     bool render_pass_has_stores{};
     bool compute_writes_pending{};

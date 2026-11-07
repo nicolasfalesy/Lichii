@@ -356,6 +356,12 @@ public:
     /// Pages draws write are only Synced or Unknown, and NeedsSync until `past_sync`: the
     /// split's back ran the work before the last host-level wait (GpuSplit::WaitForSync).
     Nx2ListRead Nx2ReadListCopy(DAddr device_addr, std::span<u8> out, bool past_sync);
+
+    /// A safe command list read (High GPU accuracy) without draining the host GPU: `out` (within
+    /// one 4 KiB page) holds guest memory; the bytes the GPU modified there and not yet downloaded
+    /// are taken from the page's copy made after its last writer, which is what downloading them
+    /// would write. False when no current copy holds them all (the caller reads safely).
+    bool Nx2OverlayListCopy(DAddr device_addr, std::span<u8> out);
     /// Front thread, the split drained: the command list page was flushed to guest memory.
     void Nx2NoteListSynced(DAddr page);
 

@@ -92,6 +92,11 @@ inline void Nx2ClearGpuWrittenPages() {
     return (g_nx2_gpu_written_pages[page / 64].load(std::memory_order_relaxed) >> (page % 64)) & 1;
 }
 
+/// High accuracy command list reads served by list copies, and those that applied pending CPU
+/// writes first (logged with EDEN_NX2_ACQUIRE_STATS).
+inline std::atomic<u64> g_nx2_overlay_reads{};
+inline std::atomic<u64> g_nx2_overlay_cpu_writes{};
+
 inline constexpr size_t Nx2MaxSemaphoreRegions = 32;
 inline std::array<std::atomic<u64>, Nx2MaxSemaphoreRegions> g_nx2_semaphore_regions{}; // starts
 
@@ -413,6 +418,33 @@ public:
         return it == pending_max.end() ? std::nullopt : std::optional<u32>{it->second.payload};
     }
 
+    /// An add release (QMD completion counter, bit 26) of `payload` to the u32 at
+    /// `device_address`, queued behind host GPU work. Retire it before writing the word, and read
+    /// the word before PendingAdd: a reader then never counts an add twice.
+    void AddPendingAdd(u64 device_address, u32 payload) {
+        std::scoped_lock lk{pending_mutex};
+        PendingAddRelease& entry = pending_add[device_address];
+        entry.sum += payload;
+        ++entry.count;
+    }
+
+    void RetirePendingAdd(u64 device_address, u32 payload) {
+        std::scoped_lock lk{pending_mutex};
+        if (const auto it = pending_add.find(device_address); it != pending_add.end()) {
+            it->second.sum -= payload;
+            if (--it->second.count == 0) {
+                pending_add.erase(it);
+            }
+        }
+    }
+
+    /// What the queued add releases to the word will add once their work is done, if any.
+    [[nodiscard]] std::optional<u64> PendingAdd(u64 device_address) {
+        std::scoped_lock lk{pending_mutex};
+        const auto it = pending_add.find(device_address);
+        return it == pending_add.end() ? std::nullopt : std::optional<u64>{it->second.sum};
+    }
+
     /// Sleeps until a write latches a waiter, or for `timeout` (CPU releases are not seen here).
     template <typename Duration>
     void WaitForLatch(Duration timeout) {
@@ -454,8 +486,13 @@ private:
         u32 payload{};
         u32 count{};
     };
+    struct PendingAddRelease {
+        u64 sum{};
+        u32 count{};
+    };
     std::mutex pending_mutex;
     std::map<u64, PendingMaxRelease> pending_max;
+    std::map<u64, PendingAddRelease> pending_add;
 };
 
 } // namespace Tegra

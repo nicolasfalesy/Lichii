@@ -23,6 +23,16 @@ void InnerFence::Queue() {
     if (is_stubbed) {
         return;
     }
+    // Nothing recorded since the last submission: it already covers everything before this fence
+    // (an empty submission costs the GPU a pipeline flush too). EDEN_NX2_SKIP_EMPTY_FLUSH=0 off.
+    static const bool skip_empty = [] {
+        const char* value = std::getenv("EDEN_NX2_SKIP_EMPTY_FLUSH");
+        return value == nullptr || value[0] != '0';
+    }();
+    if (skip_empty && !scheduler.HasWorkSinceFlush() && scheduler.CurrentTick() > 1) {
+        wait_tick = scheduler.CurrentTick() - 1;
+        return;
+    }
     // Get the current tick so we can wait for it
     wait_tick = scheduler.CurrentTick();
     if (!scheduler.DeferFlush()) {

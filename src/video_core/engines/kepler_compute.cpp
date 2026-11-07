@@ -368,7 +368,18 @@ bool KeplerCompute::ProcessNativeMethod(Core::System& system, u32 method, u32 ar
             [&](u64 address, u32 payload, u32 flags) {
                 if (!memory_manager.IsFullyMappedRange(address, sizeof(payload))) return false;
                 if (flags & (1U << 26)) {
-                    rasterizer->SignalFence([this, address, payload] {
+                    // Registered so a GEQ acquire the counter will meet need not drain the host
+                    // GPU for it (puller): Ocarina's QMD completion counter, ~740 drains a second.
+                    // The same device address retires it, even if the GPU mapping changes.
+                    const auto pending_device = memory_manager.GpuToCpuAddress(address);
+                    if (pending_device) {
+                        Tegra::Nx2SemaphoreWaiters::Get().AddPendingAdd(*pending_device, payload);
+                    }
+                    rasterizer->SignalFence([this, address, payload, pending_device] {
+                        if (pending_device) {
+                            Tegra::Nx2SemaphoreWaiters::Get().RetirePendingAdd(*pending_device,
+                                                                               payload);
+                        }
                         const u32 value = memory_manager.Read<u32>(address) + payload;
                         memory_manager.Write<u32>(address, value);
                         if (const auto device = memory_manager.GpuToCpuAddress(address)) {

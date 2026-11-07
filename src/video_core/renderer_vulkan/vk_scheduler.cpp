@@ -218,6 +218,7 @@ u64 Scheduler::Flush(VkSemaphore signal_semaphore, VkSemaphore wait_semaphore,
     // When flushing, we only send data to the worker thread; no waiting is necessary.
     const u64 signal_value = SubmitExecution(signal_semaphore, wait_semaphore);
     AllocateNewContext();
+    flush_record_count = record_count;
     last_flush = std::chrono::steady_clock::now();
     flush_pending = false;
     return signal_value;

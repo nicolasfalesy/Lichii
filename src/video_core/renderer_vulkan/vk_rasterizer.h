@@ -107,6 +107,7 @@ public:
     GpuWrittenList ReadGpuWrittenCommandList(DAddr addr, std::span<u8> out,
                                              bool past_sync) override;
     void NoteGpuWrittenCommandListSynced(DAddr page) override;
+    bool OverlayGpuWrittenCommandList(DAddr addr, std::span<u8> out) override;
     void FlushGpuWrittenCommandListPages(std::span<const DAddr> pages) override;
     bool MustFlushRegion(DAddr addr, u64 size,
                          VideoCommon::CacheType which = VideoCommon::CacheType::All) override;
@@ -273,6 +274,9 @@ private:
     boost::container::static_vector<VkSampler, MAX_TEXTURES> sampler_handles;
 
     u32 draw_counter = 0;
+    /// Scheduler::RecordCount() right after the last WaitForIdle barrier (none recorded since).
+    u64 wfi_record_count = ~u64{0};
+    u64 wfi_coalesced = 0;
     u64 render_trace_frame = 0;
     u32 render_trace_draws = 0;
     u32 render_trace_clears = 0;
