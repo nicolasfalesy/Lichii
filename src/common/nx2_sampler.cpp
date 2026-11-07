@@ -206,6 +206,15 @@ struct Symbolizer {
         if (!GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
                                     GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
                                 reinterpret_cast<LPCSTR>(address), &module)) {
+            // With PERF_BUILDID_DIR set, dynarmic writes perf-<pid>.map there: keep the address
+            // so guest code can be found offline.
+            static const bool jit_map = std::getenv("PERF_BUILDID_DIR") != nullptr;
+            if (jit_map) {
+                char text[40];
+                std::snprintf(text, sizeof(text), "(jit)+0x%llx",
+                              static_cast<unsigned long long>(address));
+                return text;
+            }
             return "(jit)";
         }
         char path[MAX_PATH] = "?";
@@ -334,7 +343,8 @@ std::string Report(const std::vector<Target>& targets, const std::vector<Sample>
         for (unsigned i = sample.depth; i-- > 0;) {
             line += ';';
             const std::string& name = symbolizer.Name(sample.frames[i]);
-            line += name.ends_with("!?") ? symbolizer.Offset(sample.frames[i]) : name;
+            line += name.ends_with("!?") || name == "(jit)" ? symbolizer.Offset(sample.frames[i])
+                                                            : name;
         }
         ++folded[line];
     }
