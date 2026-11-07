@@ -374,6 +374,16 @@ Id EmitStorageAtomicExchange32x2(EmitContext& ctx, const IR::Value& binding,
 
 Id EmitStorageAtomicAddF32(EmitContext& ctx, const IR::Value& binding, const IR::Value& offset,
                            Id value) {
+    if (ctx.native_f32_add) {
+        // Sirit has no OpAtomicFAddEXT: OpAtomicFMinEXT has the same operands, and its opcode is
+        // replaced after assembly (RewriteOpcodes).
+        const Id pointer{StoragePointer(ctx, ctx.storage_types.F32, &StorageDefinitions::F32,
+                                        binding, offset, sizeof(f32))};
+        const auto [scope, semantics]{AtomicArgs(ctx)};
+        const Id result{ctx.OpAtomicFMin(ctx.F32[1], pointer, scope, semantics, value)};
+        ctx.opcode_rewrites.emplace_back(result.value, spv::Op::OpAtomicFAddEXT);
+        return result;
+    }
     const Id ssbo{ctx.ssbos[binding.U32()].U32};
     const Id base_index{StorageIndex(ctx, offset, sizeof(u32))};
     return ctx.OpFunctionCall(ctx.F32[1], ctx.f32_add_cas, base_index, value, ssbo);

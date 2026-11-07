@@ -1432,6 +1432,15 @@ void EmitContext::DefineStorageBuffers(const Info& info, u32& binding) {
     IR::Type used_types{profile.support_descriptor_aliasing ? info.used_storage_buffer_types
                                                             : IR::Type::U32};
     used_types |= IR::Type::U32;
+    // Native float atomic add needs a float view of the buffer (aliasing the u32 one). Ocarina's
+    // light probe pass made its RED.ADD.F32s compare-and-swap loops on four words: 1.5-2.7 ms.
+    native_f32_add = info.uses_atomic_f32_add && profile.support_float32_atomic_add &&
+                     profile.support_descriptor_aliasing;
+    if (native_f32_add) {
+        used_types |= IR::Type::F32;
+        AddCapability(spv::Capability::AtomicFloat32AddEXT);
+        AddExtension("SPV_EXT_shader_atomic_float_add");
+    }
     if (profile.support_int8 && profile.support_storage_buffer_8bit &&
         True(used_types & IR::Type::U8)) {
         DefineSsbos(*this, storage_types.U8, &StorageDefinitions::U8, info, binding, U8,
@@ -1470,7 +1479,8 @@ void EmitContext::DefineStorageBuffers(const Info& info, u32& binding) {
         binding += desc.count;
     }
     const bool needs_function{
-        info.uses_global_increment || info.uses_global_decrement || info.uses_atomic_f32_add ||
+        info.uses_global_increment || info.uses_global_decrement ||
+        (info.uses_atomic_f32_add && !native_f32_add) ||
         info.uses_atomic_f16x2_add || info.uses_atomic_f16x2_min || info.uses_atomic_f16x2_max ||
         info.uses_atomic_f32x2_add || info.uses_atomic_f32x2_min || info.uses_atomic_f32x2_max};
     if (needs_function) {
@@ -1484,7 +1494,7 @@ void EmitContext::DefineStorageBuffers(const Info& info, u32& binding) {
         decrement_cas_ssbo = CasLoop(*this, Operation::Decrement, storage_types.U32.array,
                                      storage_types.U32.element, U32[1], spv::Scope::Device);
     }
-    if (info.uses_atomic_f32_add) {
+    if (info.uses_atomic_f32_add && !native_f32_add) {
         f32_add_cas = CasLoop(*this, Operation::FPAdd, storage_types.U32.array,
                               storage_types.U32.element, F32[1], spv::Scope::Device);
     }

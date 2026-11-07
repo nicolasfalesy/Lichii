@@ -1618,6 +1618,11 @@ void Device::RemoveUnsuitableExtensions() {
     RemoveExtensionFeatureIfUnsuitable(extensions.shader_quad_control, features.shader_quad_control,
                                        VK_KHR_SHADER_QUAD_CONTROL_EXTENSION_NAME);
 
+    // VK_EXT_shader_atomic_float: only storage buffer float add is used (guest RED.ADD.F32)
+    extensions.shader_atomic_float = features.shader_atomic_float.shaderBufferFloat32AtomicAdd;
+    RemoveExtensionFeatureIfUnsuitable(extensions.shader_atomic_float, features.shader_atomic_float,
+                                       VK_EXT_SHADER_ATOMIC_FLOAT_EXTENSION_NAME);
+
     // VK_KHR_workgroup_memory_explicit_layout
     extensions.workgroup_memory_explicit_layout =
         features.workgroup_memory_explicit_layout.workgroupMemoryExplicitLayout &&

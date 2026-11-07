@@ -527,6 +527,13 @@ PipelineCache::PipelineCache(Tegra::MaxwellDeviceMemoryManager& device_memory_,
         .support_demote_to_helper_invocation =
             device.IsExtShaderDemoteToHelperInvocationSupported(),
         .support_int64_atomics = device.IsExtShaderAtomicInt64Supported(),
+        // EDEN_NX2_NATIVE_FADD=0: emulate float atomic add with a compare-and-swap loop instead.
+        .support_float32_atomic_add =
+            device.IsShaderBufferFloat32AtomicAddSupported() &&
+            [] {
+                const char* value = std::getenv("EDEN_NX2_NATIVE_FADD");
+                return value == nullptr || value[0] != '0';
+            }(),
         .support_shared_int64_atomics = device.IsSharedInt64AtomicsSupported(),
         .support_derivative_control = true,
         .support_geometry_shader_passthrough = device.IsNvGeometryShaderPassthroughSupported(),

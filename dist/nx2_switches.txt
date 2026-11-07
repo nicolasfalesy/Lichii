@@ -41,6 +41,24 @@ EDEN_NX2_PREFLUSH=1
 # Ocarina of Time ivy moving every frame on Intel). Set to 0 to let the driver pick the width.
 #EDEN_NX2_MESH_WARP32=0
 
+# At High accuracy, command lists the GPU writes are read from copies made right after their
+# writer instead of draining the GPU (default). Set to 0 to always drain and flush.
+#EDEN_NX2_HIGH_LIST_COPY=0
+
+# Semaphore acquires that queued compute "add" releases will meet continue behind a barrier
+# instead of draining the GPU (default). Set to 0 to drain for them.
+#EDEN_NX2_ACQUIRE_ADDS=0
+
+# Skip wait-for-idle barriers with nothing recorded since the last one, and submissions with
+# nothing new in them (both default). Set to 0 to keep every one.
+#EDEN_NX2_WFI_COALESCE=0
+#EDEN_NX2_SKIP_EMPTY_FLUSH=0
+
+# Guest float atomic adds use the GPU's native float atomics where Vulkan offers them (default;
+# Ocarina's light probe pass 1.5-2.7 ms -> under 0.5 ms on Intel). Set to 0 for the old
+# compare-and-swap loop.
+#EDEN_NX2_NATIVE_FADD=0
+
 #EDEN_NX2_MME_JIT=0
 #EDEN_NX2_PBFLUSH=0
 #EDEN_NX2_SKIP_SAME=0
