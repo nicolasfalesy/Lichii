@@ -49,6 +49,14 @@ EDEN_NX2_PREFLUSH=1
 # instead of draining the GPU (default). Set to 0 to drain for them.
 #EDEN_NX2_ACQUIRE_ADDS=0
 
+# At High accuracy, acquires on words only the guest CPU releases (their drains never meet them)
+# wait suspended instead of draining the GPU (default). Set to 0 to always drain.
+#EDEN_NX2_ACQUIRE_SKIP=0
+
+# How long the GPU thread polls a channel waiting on a guest CPU release before it sleeps,
+# in microseconds (default 3000).
+#EDEN_NX2_PENDING_SPIN_US=3000
+
 # Skip wait-for-idle barriers with nothing recorded since the last one, and submissions with
 # nothing new in them (both default). Set to 0 to keep every one.
 #EDEN_NX2_WFI_COALESCE=0

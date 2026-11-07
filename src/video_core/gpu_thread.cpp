@@ -4,6 +4,7 @@
 // SPDX-FileCopyrightText: Copyright 2019 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <cstdlib>
 #include <chrono>
 #include <thread>
 
@@ -72,12 +73,18 @@ void ThreadManager::StartThread(VideoCore::RendererBase& renderer, Core::Fronten
                     scheduler.ResumePending(system.GPU());
                 }
                 if (!state.queue.TryPop(next)) {
-                    // The CPU usually releases the semaphore soon after: poll for half a
-                    // millisecond before sleeping, or every wait also waits out a host sleep
-                    // (title 1 waits ~25 times a second).
+                    // The CPU usually releases the semaphore soon after: poll before sleeping, or
+                    // every wait also waits out a host sleep (title 1 waits ~25 times a second).
+                    // Guest CPU releases are seen only by polling (WaitForLatch wakes for GPU
+                    // releases): Ocarina's command buffer gates open within a few milliseconds,
+                    // and polling 3 ms instead of 0.5 ms took it from 54.6 to 57.0 fps.
+                    // EDEN_NX2_PENDING_SPIN_US=<us> changes it.
                     Profile::Scope scope{Profile::Zone::PendingSleep};
-                    if (std::chrono::steady_clock::now() - last_progress <
-                        std::chrono::microseconds{500}) {
+                    static const auto pending_spin = std::chrono::microseconds{[] {
+                        const char* value = std::getenv("EDEN_NX2_PENDING_SPIN_US");
+                        return value != nullptr ? std::strtoll(value, nullptr, 10) : 3000LL;
+                    }()};
+                    if (std::chrono::steady_clock::now() - last_progress < pending_spin) {
                         std::this_thread::yield();
                     } else {
                         // Woken early when a GPU release latches a waiting channel.
