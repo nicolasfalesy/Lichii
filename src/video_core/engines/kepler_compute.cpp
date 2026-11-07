@@ -1211,6 +1211,65 @@ bool KeplerCompute::ProcessOcarinaPostChain(u64 shader_hash) {
     return false;
 }
 
+bool KeplerCompute::ProcessOcarinaGameUpscale(u64 shader_hash) {
+    namespace Ocarina = VideoCommon::FireEmblemUpscale::Ocarina;
+    if (shader_hash != Ocarina::GameUpscaleHash) {
+        return false;
+    }
+    // EDEN_NX2_OCARINA_UPSCALE=native keeps the game's upscaler, for comparisons.
+    static const bool native = [] {
+        const char* const option = std::getenv("EDEN_NX2_OCARINA_UPSCALE");
+        return option && std::string_view{option} == "native";
+    }();
+    if (native) {
+        return false;
+    }
+    // The constants ahead of the image handles (the read and written areas lead them; see
+    // ValidGameUpscale), logged when they change, 12 times at most.
+    std::array<u32, Ocarina::GameUpscaleInputOffset / sizeof(u32)> constants{};
+    const auto& cbuf = launch_description.const_buffer_config[0];
+    const GPUVAddr cbuf_address = (GPUVAddr{cbuf.address_high} << 32) | cbuf.address_low;
+    const bool have_constants = (launch_description.const_buffer_enable_mask & 1) &&
+                                cbuf.size.Value() >= sizeof(constants) &&
+                                memory_manager.IsFullyMappedRange(cbuf_address, sizeof(constants));
+    if (have_constants) {
+        memory_manager.ReadBlock(cbuf_address, constants.data(), sizeof(constants));
+        static u32 constants_logged{};
+        static decltype(constants) last_constants{};
+        if (constants_logged < 12 && constants != last_constants) {
+            last_constants = constants;
+            ++constants_logged;
+            LOG_INFO(HW_GPU, "Ocarina upscaler constants: {:08x}", fmt::join(constants, " "));
+        }
+    }
+    std::array<u32, Ocarina::GameUpscaleConstantWords> areas{};
+    std::copy_n(constants.begin(), areas.size(), areas.begin());
+    const auto input = ReadComputeImage(Ocarina::GameUpscaleInputOffset);
+    const auto output = ReadComputeImage(Ocarina::GameUpscaleOutputOffset);
+    const bool valid =
+        have_constants && input && output && Ocarina::ValidGameUpscale(*input, *output, areas);
+    // The scene is stored square-root encoded; the network's output is linear (it squares the
+    // filtered input, x * abs(x), and adds its correction), so the stand-in squares too, after a
+    // Catmull-Rom filter (bilinear alone looked clearly softer than the network).
+    const bool done = valid && rasterizer->AccelerateTextureUpscale(
+                                   *input, *output, Fermi2D::Operation::SrcCopySquare);
+    // Logged 4 times, and on the first 8 changes between replaced and kept after that.
+    static u32 logged{};
+    static bool last_done{};
+    if (logged < 4 || (done != last_done && logged < 12)) {
+        ++logged;
+        LOG_INFO(HW_GPU, "Ocarina upscaler: {} input={:#x} {}x{} output={:#x} {}x{}",
+                 done ? "replaced by a bicubic upscale"
+                 : valid ? "kept (images not ready in the texture cache)"
+                         : "kept (not a whole-image pair)",
+                 input ? input->Address() : 0, input ? input->Width() : 0,
+                 input ? input->Height() : 0, output ? output->Address() : 0,
+                 output ? output->Width() : 0, output ? output->Height() : 0);
+    }
+    last_done = done;
+    return done;
+}
+
 std::optional<Texture::TICEntry> KeplerCompute::FindComputeColorImage(
     GPUVAddr exclude, const std::optional<Texture::TICEntry>& size_of) const {
     const auto& cbuf = launch_description.const_buffer_config[0];

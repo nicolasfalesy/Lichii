@@ -151,6 +151,38 @@ constexpr u64 AaListHash = 0xd9ee412f00ce399aULL;
 constexpr u64 AaEdgesHash = 0xa2fcaa95c5a162f3ULL;
 constexpr u64 AaResolveHash = 0x6bd913e1f34e83ebULL;
 
+// Gameplay upscaler, run when the game renders below 1080p (without the "Max Resolution" add-on,
+// at 854x480): one dispatch of a small network (weights in a 12 KiB storage buffer) samples the
+// scene (E5B9G9R9 texture at constant bank 0 + 0xc0) and writes the 1920x1080 B10G11R11 image at
+// + 0xd0. It takes 11.5 ms of a frame on an Intel Arc B390; a Catmull-Rom upscale stands in. The
+// scene is stored square-root encoded: the network squares the filtered scene (x * abs(x)) and
+// adds its correction, so the stand-in squares as well (blit_color_square.frag).
+constexpr u64 GameUpscaleHash = 0x03bf0ffc7d2d0bedULL;
+constexpr u32 GameUpscaleInputOffset = 0xc0;
+constexpr u32 GameUpscaleOutputOffset = 0xd0;
+// The constants open with the grid (43x24x1), then the last texel of the area the network reads
+// (words 6 and 7: 853, 479) and writes (10 and 11: 1919, 1079).
+constexpr size_t GameUpscaleConstantWords = 12;
+
+// The stand-in stretches whole images, so it takes over only while both areas cover their whole
+// images, in the formats seen: a scene drawn into part of its texture keeps the network.
+inline bool ValidGameUpscale(const Tegra::Texture::TICEntry& input,
+                             const Tegra::Texture::TICEntry& output,
+                             const std::array<u32, GameUpscaleConstantWords>& constants) {
+    using namespace Tegra::Texture;
+    const auto plain = [](const TICEntry& image, TextureFormat format) {
+        return image.format == format && image.Address() != 0 && image.IsBlockLinear() &&
+               image.Depth() == 1 && image.max_mip_level == 0 &&
+               (image.texture_type == TextureType::Texture2D ||
+                image.texture_type == TextureType::Texture2DNoMipmap);
+    };
+    return plain(input, TextureFormat::E5B9G9R9) && plain(output, TextureFormat::B10G11R11) &&
+           input.Address() != output.Address() && output.Width() >= input.Width() &&
+           output.Height() >= input.Height() && constants[6] == input.Width() - 1 &&
+           constants[7] == input.Height() - 1 && constants[10] == output.Width() - 1 &&
+           constants[11] == output.Height() - 1;
+}
+
 constexpr bool IsNetworkProgram(u64 native_key) {
     for (const u64 key : NetworkProgramKeys) {
         if (key == native_key) {

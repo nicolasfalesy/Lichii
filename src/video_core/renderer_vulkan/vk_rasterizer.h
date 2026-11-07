@@ -150,6 +150,9 @@ public:
     std::optional<VideoCore::GameDlssProbe> ProbeGameDlssOutput(
         const Tegra::Engines::Fermi2D::Surface& src,
         const Tegra::Engines::Fermi2D::Surface& dst) override;
+    bool AccelerateTextureUpscale(const Tegra::Texture::TICEntry& src,
+                                  const Tegra::Texture::TICEntry& dst,
+                                  Tegra::Engines::Fermi2D::Operation operation) override;
     bool AccelerateTemporalUpscale(const Tegra::Engines::Fermi2D::Surface& src,
                                    const Tegra::Engines::Fermi2D::Surface& dst,
                                    const Tegra::Engines::Fermi2D::Surface& motion_vectors,

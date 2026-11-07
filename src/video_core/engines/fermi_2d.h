@@ -73,6 +73,10 @@ public:
         // Not a hardware operation: a copy that decodes sRGB-encoded values to linear, for the
         // nx2 upscale fallback standing in for a program that decodes its output.
         SrcCopySrgbToLinear = 7,
+        // Not a hardware operation either: a Catmull-Rom upscale that squares square-root encoded
+        // values, for Ocarina of Time's upscaler stand-in (its scene is stored that way at low
+        // resolution). Its shader filters by itself and needs the bilinear sampler.
+        SrcCopySquare = 8,
     };
 
     enum class MemoryLayout : u32 {

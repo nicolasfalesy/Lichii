@@ -258,6 +258,8 @@ public:
     bool ProcessOcarinaMovie(u64 native_key);
     /// Ocarina's gameplay post-process chain, by shader hash: whether this dispatch is replaced.
     bool ProcessOcarinaPostChain(u64 shader_hash);
+    /// Ocarina's gameplay upscaler, by shader hash: whether this dispatch is replaced.
+    bool ProcessOcarinaGameUpscale(u64 shader_hash);
     void TraceDlssContract(u64 native_key, bool warn_unvalidated = true);
 
     /// GPU thread split with macros on its front half (gpu_split.h, EDEN_NX2_SPLIT=2), called by

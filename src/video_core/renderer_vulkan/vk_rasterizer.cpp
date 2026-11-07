@@ -2164,6 +2164,13 @@ bool RasterizerVulkan::AccelerateSurfaceCopy(const Tegra::Engines::Fermi2D::Surf
     return texture_cache.BlitImage(dst, src, copy_config);
 }
 
+bool RasterizerVulkan::AccelerateTextureUpscale(const Tegra::Texture::TICEntry& src,
+                                               const Tegra::Texture::TICEntry& dst,
+                                               Tegra::Engines::Fermi2D::Operation operation) {
+    std::scoped_lock lock{texture_cache.mutex};
+    return texture_cache.UpscaleTexture(dst, src, operation);
+}
+
 bool RasterizerVulkan::UsesNvidiaDlss() const {
     return texture_cache_runtime.UsesNvidiaDlss();
 }

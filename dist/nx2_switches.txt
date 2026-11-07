@@ -67,6 +67,11 @@ EDEN_NX2_PREFLUSH=1
 # compare-and-swap loop.
 #EDEN_NX2_NATIVE_FADD=0
 
+# Ocarina of Time without its "Max Resolution" add-on renders at 854x480 and runs a small
+# network to reach 1080p (11.5 ms of every frame on Intel): a bicubic upscale stands in
+# (default; ~51-53 fps sustained against ~42 with the add-on). Set to native for the network.
+#EDEN_NX2_OCARINA_UPSCALE=native
+
 #EDEN_NX2_MME_JIT=0
 #EDEN_NX2_PBFLUSH=0
 #EDEN_NX2_SKIP_SAME=0

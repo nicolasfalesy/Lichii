@@ -218,6 +218,17 @@ public:
         return false;
     }
 
+    /// Stretch (bilinear, unless operation filters by itself) of the sampled texture src over the
+    /// whole colour image dst, both named by
+    /// their texture descriptors (for formats a Fermi2D surface cannot name), through operation
+    /// (SrcCopy, or a decode such as SrcCopySquare). False when unsupported; the caller retains
+    /// its native dispatch.
+    [[nodiscard]] virtual bool AccelerateTextureUpscale(
+        const Tegra::Texture::TICEntry& src, const Tegra::Texture::TICEntry& dst,
+        Tegra::Engines::Fermi2D::Operation operation) {
+        return false;
+    }
+
     /// Stand-in for a DLSS evaluation: temporal upscale of src into dst along motion_vectors
     /// (jitter in src pixels; motion_scale turns a motion vector into a UV offset to the previous
     /// frame), with depth for NVIDIA DLSS or FSR 3.1. With use_history=false, only de-jitter src.

@@ -1194,6 +1194,64 @@ bool TextureCache<P>::BlitImage(const Tegra::Engines::Fermi2D::Surface& dst,
 }
 
 template <class P>
+bool TextureCache<P>::UpscaleTexture(const Tegra::Texture::TICEntry& dst,
+                                     const Tegra::Texture::TICEntry& src,
+                                     Tegra::Engines::Fermi2D::Operation operation) {
+    if constexpr (FRAMEBUFFER_BLITS) {
+        return false;
+    } else {
+        const ImageInfo dst_info(dst);
+        const ImageInfo src_info(src);
+        has_deleted_images = false;
+        const ImageId src_id = FindOrInsertImage(src_info, src.Address(), RelaxedOptions{});
+        const ImageId dst_id = FindOrInsertImage(dst_info, dst.Address(), RelaxedOptions{});
+        if (has_deleted_images || !src_id || !dst_id || src_id == dst_id) {
+            return false;
+        }
+        // Whole single-sample images in the formats their descriptors name: anything else (a
+        // layer of a bigger image, an alias in another format) keeps the native dispatch.
+        const auto whole = [&](ImageId id, const ImageInfo& info, GPUVAddr address) {
+            const ImageBase& image = slot_images[id];
+            const std::optional base = image.TryFindBase(address);
+            return base && base->level == 0 && base->layer == 0 && image.info.num_samples == 1 &&
+                   image.info.format == info.format && image.info.size.width == info.size.width &&
+                   image.info.size.height == info.size.height;
+        };
+        if (!whole(src_id, src_info, src.Address()) || !whole(dst_id, dst_info, dst.Address())) {
+            return false;
+        }
+        // As in BlitImage: a parked clear has to land before the copy, not wipe it afterwards.
+        runtime.FlushDeferredClear();
+        PrepareImage(src_id, false, false);
+        PrepareImage(dst_id, true, false);
+        const SubresourceRange range{.base = {.level = 0, .layer = 0}, .extent = {1, 1}};
+        // The source is only sampled: formats like E5B9G9R9 cannot be render targets.
+        const ImageViewId src_view_id = FindOrEmplaceImageView(
+            src_id, ImageViewInfo(ImageViewType::e2D, src_info.format, range));
+        const auto [dst_framebuffer_id, dst_view_id] = RenderTargetFromImage(
+            dst_id, ImageViewInfo(ImageViewType::e2D, dst_info.format, range));
+        // Whole images, each at its own scale (BlitImage scales its regions the same way).
+        const auto& resolution = Settings::values.resolution_info;
+        const auto region = [&](ImageId id) {
+            const ImageBase& image = slot_images[id];
+            const bool rescaled = True(image.flags & ImageFlagBits::Rescaled);
+            const u32 width = image.info.size.width;
+            const u32 height = image.info.size.height;
+            return Region2D{
+                .start = {.x = 0, .y = 0},
+                .end = {.x = static_cast<s32>(rescaled ? resolution.ScaleUp(width) : width),
+                        .y = static_cast<s32>(rescaled ? resolution.ScaleUp(height) : height)},
+            };
+        };
+        // Look the slots up last: creating the views and framebuffer can move them.
+        runtime.BlitImage(&slot_framebuffers[dst_framebuffer_id], slot_image_views[dst_view_id],
+                          slot_image_views[src_view_id], region(dst_id), region(src_id),
+                          Tegra::Engines::Fermi2D::Filter::Bilinear, operation);
+        return true;
+    }
+}
+
+template <class P>
 std::optional<VideoCore::GameDlssProbe> TextureCache<P>::ProbeGameDlssOutput(
     const Tegra::Engines::Fermi2D::Surface& dst, const Tegra::Engines::Fermi2D::Surface& src) {
     if constexpr (FRAMEBUFFER_BLITS) {

@@ -231,3 +231,40 @@ TEST_CASE("Star Fox logged native-resolution cutscene colour pair is accepted", 
     alias.address_high.Assign(input.address_high);
     REQUIRE_FALSE(FE::ValidPair(input, alias, true));
 }
+
+TEST_CASE("Ocarina upscaler stand-in takes whole-image pairs only", "[fe_upscale]") {
+    namespace Ocarina = FE::Ocarina;
+    auto input = Image(0x132b1000, 854, 480);
+    input.format.Assign(TextureFormat::E5B9G9R9);
+    const auto output = Image(0x252ff000, 1920, 1080);
+    // As captured: grid 43x24x1, then the last texel read (853, 479) and written (1919, 1079).
+    const std::array<u32, Ocarina::GameUpscaleConstantWords> areas{
+        0xe0, 43, 24, 1, 0, 0, 853, 479, 0, 0, 1919, 1079};
+    REQUIRE(Ocarina::ValidGameUpscale(input, output, areas));
+
+    // A scene drawn into part of its texture (or written to part of the output) keeps the network.
+    for (const size_t word : {6, 7, 10, 11}) {
+        auto partial = areas;
+        partial[word] -= 100;
+        REQUIRE_FALSE(Ocarina::ValidGameUpscale(input, output, partial));
+    }
+    auto wrong_format = input;
+    wrong_format.format.Assign(TextureFormat::B10G11R11);
+    REQUIRE_FALSE(Ocarina::ValidGameUpscale(wrong_format, output, areas));
+    auto layered = output;
+    layered.texture_type.Assign(TextureType::Texture2DArray);
+    REQUIRE_FALSE(Ocarina::ValidGameUpscale(input, layered, areas));
+    auto mipmapped = input;
+    mipmapped.max_mip_level.Assign(1);
+    REQUIRE_FALSE(Ocarina::ValidGameUpscale(mipmapped, output, areas));
+    auto alias = output;
+    alias.address_low = input.address_low;
+    REQUIRE_FALSE(Ocarina::ValidGameUpscale(input, alias, areas));
+    // A downscale is not this pass.
+    auto big_input = Image(0x132b1000, 2560, 1440);
+    big_input.format.Assign(TextureFormat::E5B9G9R9);
+    auto big_areas = areas;
+    big_areas[6] = 2559;
+    big_areas[7] = 1439;
+    REQUIRE_FALSE(Ocarina::ValidGameUpscale(big_input, output, big_areas));
+}

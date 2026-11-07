@@ -293,6 +293,11 @@ public:
                    const Tegra::Engines::Fermi2D::Surface& src,
                    const Tegra::Engines::Fermi2D::Config& copy);
 
+    /// Stretch of the sampled texture src over the whole colour image dst (see the
+    /// rasterizer's AccelerateTextureUpscale). False when unsupported.
+    bool UpscaleTexture(const Tegra::Texture::TICEntry& dst, const Tegra::Texture::TICEntry& src,
+                        Tegra::Engines::Fermi2D::Operation operation);
+
     /// Stand-in for a DLSS evaluation: temporal upscale of src into dst (see the runtime's
     /// TemporalUpscale). False when unsupported; the caller retains its native dispatch.
     bool TemporalUpscale(const Tegra::Engines::Fermi2D::Surface& dst,
