@@ -331,19 +331,18 @@ void Puller::ProcessSemaphoreTriggerMethod(DmaPusher& dma_pusher) {
         }
         const auto stats_start = acquire_stats ? std::chrono::steady_clock::now()
                                                : std::chrono::steady_clock::time_point{};
-        // Words whose drains never met an acquire are released by the guest CPU (Ocarina's
-        // command buffer gates, ~250 ms of every second of the GPU thread at High accuracy): the
-        // drain only idled the GPU. Submit what is recorded (a fence, so its releases still
-        // land) and wait suspended; every 256th acquire on such a word still drains, in case
-        // that changes. Only with delayed fences (High): there a drain waits for the GPU.
-        // EDEN_NX2_ACQUIRE_SKIP=0 opts out.
+        // Words whose last 16 drains met no acquire are released by the guest CPU (Ocarina's
+        // command buffer gates, ~250 ms of every second of the GPU thread at High accuracy, then
+        // its per-frame flags at 0x6e76000, ~165 ms): the drain only idled the GPU. Submit what
+        // is recorded (a fence, so its releases still land) and wait suspended; every 256th
+        // acquire on such a word still drains, in case that changes. Only with delayed fences
+        // (High): there a drain waits for the GPU. EDEN_NX2_ACQUIRE_SKIP=0 opts out.
         static const bool skip_enabled = [] {
             const char* value = std::getenv("EDEN_NX2_ACQUIRE_SKIP");
             return value == nullptr || value[0] != '0';
         }();
         struct DrainHistory {
-            u32 drains{};
-            u32 met{};
+            u32 misses{}; ///< drains in a row that did not meet the acquire
             u32 skipped{};
         };
         static std::unordered_map<u64, DrainHistory> drain_history;
@@ -351,17 +350,14 @@ void Puller::ProcessSemaphoreTriggerMethod(DmaPusher& dma_pusher) {
                                      ? dma_pusher.memory_manager.GpuToCpuAddress(acquire.address)
                                      : std::nullopt;
         DrainHistory* const history = skip_device ? &drain_history[*skip_device] : nullptr;
-        if (history != nullptr && history->drains >= 16 && history->met == 0 &&
-            (++history->skipped % 256) != 0) {
+        if (history != nullptr && history->misses >= 16 && (++history->skipped % 256) != 0) {
             dma_pusher.rasterizer->SignalReference();
         } else {
             ReleaseFences(dma_pusher);
             if (history != nullptr) {
-                ++history->drains;
-                history->met += (waiters.Latched(this) ||
-                                 acquire.Matches(ReadSemaphoreWord(dma_pusher, acquire.address)))
-                                    ? 1
-                                    : 0;
+                const bool met = waiters.Latched(this) ||
+                                 acquire.Matches(ReadSemaphoreWord(dma_pusher, acquire.address));
+                history->misses = met ? 0 : history->misses + 1;
             }
         }
         if (acquire_stats) {
