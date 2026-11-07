@@ -2183,7 +2183,22 @@ private:
             (m_presents % every) != 1 % every || m_capture_pending->exchange(true)) {
             return;
         }
-        const auto layout = Layout::DefaultFrameLayout(1280, 720);
+        // EDEN_NX2_FRAME_CAPTURE_SIZE=<w>x<h>: the screen to lay the frame out on (1280x720 by
+        // default), with the scaling filter, as a window or fullscreen of that size shows it.
+        static const std::pair<u32, u32> size = [] {
+            u32 width = 1280, height = 720;
+            if (const char* value = std::getenv("EDEN_NX2_FRAME_CAPTURE_SIZE")) {
+                char* end{};
+                const unsigned long w = std::strtoul(value, &end, 10);
+                const unsigned long h = *end == 'x' ? std::strtoul(end + 1, nullptr, 10) : 0;
+                if (w >= 64 && h >= 64 && w <= 8192 && h <= 8192) {
+                    width = static_cast<u32>(w);
+                    height = static_cast<u32>(h);
+                }
+            }
+            return std::pair{width, height};
+        }();
+        const auto layout = Layout::DefaultFrameLayout(size.first, size.second);
         auto pixels = std::make_shared<std::vector<u8>>(layout.width * layout.height * 4);
         const std::string path =
             fmt::format("{}/nx2-frame-{:05}.tga", directory, m_presents);
