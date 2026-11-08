@@ -42,6 +42,7 @@
 #include "common/settings.h"
 #include "common/string_util.h"
 #include "core/core.h"
+#include "core/tools/renderdoc.h"
 #include "core/core_timing.h"
 #include "core/cpu_manager.h"
 #include "core/crypto/key_manager.h"
@@ -891,6 +892,20 @@ static void RunKeyScript(InputCommon::InputSubsystem& input_subsystem) {
 extern "C" SDL_AppResult SDL_AppIterate(void *appstate) {
     SdlState *state = (SdlState *)appstate;
     RunKeyScript(state->input_subsystem);
+    // EDEN_NX2_RENDERDOC_AT=<present>: run under renderdoccmd with enable_renderdoc_hotkey on to
+    // capture the frame starting at that present, without the GUI hotkey.
+    static const u64 renderdoc_at = [] {
+        const char* value = std::getenv("EDEN_NX2_RENDERDOC_AT");
+        return value != nullptr ? static_cast<u64>(std::strtoull(value, nullptr, 10)) : u64{0};
+    }();
+    static int renderdoc_toggles = 0;
+    if (renderdoc_at != 0 && renderdoc_toggles < 2 &&
+        Core::g_nx2_present_count.load() >= renderdoc_at + static_cast<u64>(renderdoc_toggles)) {
+        state->system.GetRenderdocAPI().ToggleCapture();
+        LOG_INFO(Frontend, "RenderDoc capture {} at present {}",
+                 renderdoc_toggles == 0 ? "started" : "ended", Core::g_nx2_present_count.load());
+        ++renderdoc_toggles;
+    }
     if (state->emu_window) {
         state->emu_window->ApplyPendingTitle();
     }
