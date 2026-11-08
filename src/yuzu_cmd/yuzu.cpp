@@ -16,6 +16,10 @@
 #include <cstring>
 #include <filesystem>
 #include <iostream>
+#ifndef _WIN32
+#include <fcntl.h>
+#include <unistd.h>
+#endif
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -776,6 +780,36 @@ static void RunKeyScript(InputCommon::InputSubsystem& input_subsystem) {
         }
         ++next;
     }
+#ifndef _WIN32
+    // EDEN_NX2_KEY_FIFO=<fifo>: keys can also arrive live, one per line in the same signed form
+    // (82 presses, -82 releases), so a hidden run can be steered while it plays.
+    static const int fifo = [] {
+        const char* path = std::getenv("EDEN_NX2_KEY_FIFO");
+        return path != nullptr ? ::open(path, O_RDONLY | O_NONBLOCK) : -1;
+    }();
+    if (fifo >= 0) {
+        static std::string pending;
+        char buffer[256];
+        ssize_t count;
+        while ((count = ::read(fifo, buffer, sizeof(buffer))) > 0) {
+            pending.append(buffer, static_cast<size_t>(count));
+        }
+        for (size_t end; (end = pending.find('\n')) != std::string::npos;) {
+            const int code = std::atoi(pending.substr(0, end).c_str());
+            pending.erase(0, end + 1);
+            if (code == 0) {
+                continue;
+            }
+            LOG_INFO(Frontend, "Key FIFO: {} key {} (frame {})", code < 0 ? "release" : "press",
+                     code < 0 ? -code : code, frame);
+            if (code < 0) {
+                input_subsystem.GetKeyboard()->ReleaseKey(static_cast<std::size_t>(-code));
+            } else {
+                input_subsystem.GetKeyboard()->PressKey(static_cast<std::size_t>(code));
+            }
+        }
+    }
+#endif
 }
 
 extern "C" SDL_AppResult SDL_AppIterate(void *appstate) {
