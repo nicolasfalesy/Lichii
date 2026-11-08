@@ -8,6 +8,10 @@
 #include <chrono>
 #include <thread>
 
+#ifdef __linux__
+#include <sys/prctl.h>
+#endif
+
 #include "common/assert.h"
 #include "common/dkb_cpu_trace.h"
 #include "common/scope_exit.h"
@@ -53,6 +57,10 @@ void ThreadManager::StartThread(VideoCore::RendererBase& renderer, Core::Fronten
     thread = std::jthread([&](std::stop_token stop_token) {
         const Common::DkbCpuTrace::Registration cpu_trace{Common::DkbCpuTrace::Role::GpuCommand};
         Common::SetCurrentThreadName("GPU");
+#ifdef __linux__
+        // The pending-channel polls below sleep 50 us; the default timer slack adds up to 50 more.
+        prctl(PR_SET_TIMERSLACK, 1UL, 0, 0, 0);
+#endif
         Common::SetCurrentThreadPriority(Common::ThreadPriority::Critical);
         Common::SetCurrentThreadToPerformanceCores();
         if (Settings::values.pin_gpu_threads.GetValue()) {
@@ -76,19 +84,24 @@ void ThreadManager::StartThread(VideoCore::RendererBase& renderer, Core::Fronten
                     scheduler.ResumePending(system.GPU());
                 }
                 if (!state.queue.TryPop(next)) {
-                    // The CPU usually releases the semaphore soon after: poll before sleeping, or
-                    // every wait also waits out a host sleep (title 1 waits ~25 times a second).
-                    // Guest CPU releases are seen only by polling (WaitForLatch wakes for GPU
-                    // releases): Ocarina's command buffer gates open within a few milliseconds,
-                    // and polling 3 ms instead of 0.5 ms took it from 54.6 to 57.0 fps.
-                    // EDEN_NX2_PENDING_SPIN_US=<us> changes it.
+                    // The CPU usually releases the semaphore soon after: poll before sleeping, then
+                    // sleep in short steps. Guest CPU releases are seen only by polling
+                    // (WaitForLatch wakes for GPU releases): Ocarina's command buffer gates open
+                    // within a few milliseconds, and polling 3 ms instead of 0.5 ms took it from
+                    // 54.6 to 57.0 fps on Windows. EDEN_NX2_PENDING_SPIN_US=<us> changes the poll.
+                    // Upstream's 50 us sleeps after it (Ocarina's present waited ~17 ms a frame
+                    // with 1 ms sleeps, ~1 ms with 50 us); a channel still waiting after 2 s
+                    // (menus, loading) waits for a latch instead.
                     Profile::Scope scope{Profile::Zone::PendingSleep};
                     static const auto pending_spin = std::chrono::microseconds{[] {
                         const char* value = std::getenv("EDEN_NX2_PENDING_SPIN_US");
                         return value != nullptr ? std::strtoll(value, nullptr, 10) : 3000LL;
                     }()};
-                    if (std::chrono::steady_clock::now() - last_progress < pending_spin) {
+                    const auto waited = std::chrono::steady_clock::now() - last_progress;
+                    if (waited < pending_spin) {
                         std::this_thread::yield();
+                    } else if (waited < std::chrono::seconds{2}) {
+                        std::this_thread::sleep_for(std::chrono::microseconds{50});
                     } else {
                         // Woken early when a GPU release latches a waiting channel.
                         Tegra::Nx2SemaphoreWaiters::Get().WaitForLatch(std::chrono::milliseconds{1});
