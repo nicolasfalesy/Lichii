@@ -1611,11 +1611,11 @@ bool QueryCacheRuntime::HostConditionalRenderingCompareValues(VideoCommon::Looku
     auto driver_id = impl->device.GetDriverID();
     const bool is_gpu_high = Settings::IsGPULevelHigh();
 
-    // Intel's Mesa driver (ANV) gets the same non-High bypass as Intel's Windows driver: with host conditional
-    // rendering on, Ocarina of Time's world draws were skipped for seconds at a time on an Arc B390 (Xe3),
+    // Intel's Mesa driver (ANV) always skips host conditional rendering (draws everything), at any accuracy:
+    // with it on, Ocarina of Time's world draws were skipped for seconds at a time on an Arc B390 (Xe3),
     // leaving only characters and the HUD (frame dump 2026-11-08: the scene passes all zero, depth empty).
-    if ((!is_gpu_high && (driver_id == VK_DRIVER_ID_INTEL_PROPRIETARY_WINDOWS ||
-                          driver_id == VK_DRIVER_ID_INTEL_OPEN_SOURCE_MESA)) || driver_id == VK_DRIVER_ID_QUALCOMM_PROPRIETARY || driver_id == VK_DRIVER_ID_ARM_PROPRIETARY || driver_id == VK_DRIVER_ID_MESA_TURNIP) {
+    if ((!is_gpu_high && driver_id == VK_DRIVER_ID_INTEL_PROPRIETARY_WINDOWS) ||
+        driver_id == VK_DRIVER_ID_INTEL_OPEN_SOURCE_MESA || driver_id == VK_DRIVER_ID_QUALCOMM_PROPRIETARY || driver_id == VK_DRIVER_ID_ARM_PROPRIETARY || driver_id == VK_DRIVER_ID_MESA_TURNIP) {
         EndHostConditionalRendering();
         TraceConditionalRendering("driver-bypass", true, object_1.address, object_2.address);
         return true;
