@@ -308,9 +308,9 @@ void Scheduler::Finish(VkSemaphore signal_semaphore, VkSemaphore wait_semaphore,
             name.remove_prefix(slash + 1);
         }
         std::scoped_lock lock{g_profile_end_mutex};
-        auto& site = g_profile_finish_sites[fmt::format("{}:{}", name, location.line())];
-        ++site.first;
-        site.second += waited;
+        auto& finish_site = g_profile_finish_sites[fmt::format("{}:{}", name, location.line())];
+        ++finish_site.first;
+        finish_site.second += waited;
     }
 }
 
