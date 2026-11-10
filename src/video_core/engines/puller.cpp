@@ -558,12 +558,12 @@ void Puller::ProcessSemaphoreTriggerMethod(DmaPusher& dma_pusher) {
                 u32 op{}, value{}, before{}, after{};
                 s64 pending_payload{-1}, pending_max{-1}, pending_add{-1};
             };
-            static std::unordered_map<u64, Entry> stats;
+            static std::unordered_map<u64, Entry> drain_stats;
             static auto next_report = std::chrono::steady_clock::now() + std::chrono::seconds{10};
             const auto now = std::chrono::steady_clock::now();
             const u32 after = ReadSemaphoreWord(dma_pusher, acquire.address);
             const auto device = dma_pusher.memory_manager.GpuToCpuAddress(acquire.address);
-            Entry& e = stats[device.value_or(acquire.address)];
+            Entry& e = drain_stats[device.value_or(acquire.address)];
             ++e.count;
             e.met += (waiters.Latched(this) || acquire.Matches(after)) ? 1 : 0;
             e.ns += static_cast<u64>(std::chrono::duration_cast<std::chrono::nanoseconds>(now - stats_start).count());
@@ -580,7 +580,7 @@ void Puller::ProcessSemaphoreTriggerMethod(DmaPusher& dma_pusher) {
             }
             if (now >= next_report) {
                 next_report = now + std::chrono::seconds{10};
-                std::vector<std::pair<u64, Entry>> sorted(stats.begin(), stats.end());
+                std::vector<std::pair<u64, Entry>> sorted(drain_stats.begin(), drain_stats.end());
                 std::ranges::sort(sorted, std::greater<>{}, [](const auto& p) { return p.second.ns; });
                 std::string text;
                 for (size_t i = 0; i < (std::min<size_t>)(sorted.size(), 10); ++i) {
@@ -592,7 +592,7 @@ void Puller::ProcessSemaphoreTriggerMethod(DmaPusher& dma_pusher) {
                                         s.pending_add);
                 }
                 LOG_INFO(HW_GPU, "Acquire drains (10 s):{}", text);
-                stats.clear();
+                drain_stats.clear();
             }
         }
         // EDEN_NX2_ACQUIRE_TRACE=1: the first acquires that waited, with what met them.
