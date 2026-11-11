@@ -1579,14 +1579,14 @@ bool QueryCacheRuntime::HostConditionalRenderingCompareValues(VideoCommon::Looku
     auto driver_id = impl->device.GetDriverID();
     const bool is_gpu_high = Settings::IsGPULevelHigh();
 
-    // Intel's Mesa driver (ANV) always skips host conditional rendering (draws everything), at any accuracy:
-    // with it on, Ocarina of Time's world draws were skipped for seconds at a time on an Arc B390 (Xe3),
-    // leaving only characters and the HUD (frame dump 2026-11-08: the scene passes all zero, depth empty).
-    // EDEN_NX2_COND_RENDER_BYPASS=0 turns the Mesa bypass off, to A/B it against the occlusion
-    // bank fix (#718), which removes one cause of the culled world without drawing what the game culls.
+    // EDEN_NX2_COND_RENDER_BYPASS=1: Intel's Mesa driver (ANV) skips host conditional rendering
+    // (draws everything) at any accuracy. Off by default: it was added for Ocarina of Time's
+    // "black world", which turned out to be the post chain stand-in copying a wrong image (see
+    // Ocarina::PostColorOffset), and drawing what the game culls cost 11% in the Deku Tree
+    // (53 fps against 60, Arc B390, 2026-11-11).
     static const bool mesa_bypass = [] {
         const char* value = std::getenv("EDEN_NX2_COND_RENDER_BYPASS");
-        return value == nullptr || value[0] != '0';
+        return value != nullptr && value[0] == '1';
     }();
     if ((!is_gpu_high && driver_id == VK_DRIVER_ID_INTEL_PROPRIETARY_WINDOWS) ||
         (mesa_bypass && driver_id == VK_DRIVER_ID_INTEL_OPEN_SOURCE_MESA) || driver_id == VK_DRIVER_ID_QUALCOMM_PROPRIETARY || driver_id == VK_DRIVER_ID_ARM_PROPRIETARY || driver_id == VK_DRIVER_ID_MESA_TURNIP) {

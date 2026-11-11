@@ -150,6 +150,31 @@ constexpr u64 AaClassifyHash = 0xa107e12b6771be48ULL;
 constexpr u64 AaListHash = 0xd9ee412f00ce399aULL;
 constexpr u64 AaEdgesHash = 0xa2fcaa95c5a162f3ULL;
 constexpr u64 AaResolveHash = 0x6bd913e1f34e83ebULL;
+// The classifier's scene colour handle is at constant bank 0 + 0x148 and the resolve's output
+// handle at + 0xd0, in every frame traced. The stand-in used to take the first B10G11R11 handle it
+// found scanning the bank, but the words before these slots are other constants that now and then
+// equal a live texture index: it then copied a wrong image (a 480x270 one, so no output matched and
+// the game's chain ran for ~9 s, or another 1080p target, leaving the real output empty), which
+// showed as a black world behind the HUD and as the picture flipping between sharp and soft.
+constexpr u32 PostColorOffset = 0x148;
+constexpr u32 PostOutputOffset = 0xd0;
+
+inline bool ValidPostImage(const Tegra::Texture::TICEntry& image) {
+    using namespace Tegra::Texture;
+    return image.format == TextureFormat::B10G11R11 && image.Address() != 0 &&
+           image.IsBlockLinear() && image.Depth() == 1 && image.max_mip_level == 0 &&
+           image.Width() >= 320 &&
+           (image.texture_type == TextureType::Texture2D ||
+            image.texture_type == TextureType::Texture2DNoMipmap);
+}
+
+// The copy is 1:1, so the output must be another image of the scene colour's size.
+inline bool ValidPostPair(const Tegra::Texture::TICEntry& color,
+                          const Tegra::Texture::TICEntry& output) {
+    return ValidPostImage(color) && ValidPostImage(output) &&
+           color.Address() != output.Address() && color.Width() == output.Width() &&
+           color.Height() == output.Height();
+}
 
 // Gameplay upscaler, run when the game renders below 1080p (without the "Max Resolution" add-on,
 // at 854x480): one dispatch of a small network (weights in a 12 KiB storage buffer) samples the

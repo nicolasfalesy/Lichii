@@ -296,6 +296,8 @@ private:
     bool TryOcarinaPostChainCopy();
     std::optional<Texture::TICEntry> ocarina_post_color;
     bool ocarina_post_replaced{};
+    /// This frame's classify and list passes were skipped for the copy.
+    bool ocarina_post_skipped{};
     /// The movie frame this evaluation's network reads, taken at its last pass.
     std::optional<Texture::TICEntry> ocarina_movie_frame;
     /// The last output pass was replaced, so the next evaluation's network passes are skipped.

@@ -268,3 +268,25 @@ TEST_CASE("Ocarina upscaler stand-in takes whole-image pairs only", "[fe_upscale
     big_areas[7] = 1439;
     REQUIRE_FALSE(Ocarina::ValidGameUpscale(big_input, output, big_areas));
 }
+
+TEST_CASE("Ocarina post chain copy takes a same-size B10G11R11 pair only", "[fe_upscale]") {
+    namespace Ocarina = FE::Ocarina;
+    // As traced: scene colour 0x8115776000 and the HUD's colour target 0x81252ff000, both 1080p.
+    auto color = Image(0x15776000, 1920, 1080);
+    color.format.Assign(TextureFormat::B10G11R11);
+    auto output = Image(0x252ff000, 1920, 1080);
+    output.format.Assign(TextureFormat::B10G11R11);
+    REQUIRE(Ocarina::ValidPostPair(color, output));
+
+    // The stray matches that blacked the world out: a 480x270 image, and the colour itself.
+    auto small = Image(0x17097000, 480, 270);
+    small.format.Assign(TextureFormat::B10G11R11);
+    REQUIRE_FALSE(Ocarina::ValidPostPair(small, output));
+    REQUIRE_FALSE(Ocarina::ValidPostPair(color, color));
+    auto wrong_format = output;
+    wrong_format.format.Assign(TextureFormat::A8B8G8R8);
+    REQUIRE_FALSE(Ocarina::ValidPostPair(color, wrong_format));
+    auto mipmapped = output;
+    mipmapped.max_mip_level.Assign(1);
+    REQUIRE_FALSE(Ocarina::ValidPostPair(color, mipmapped));
+}

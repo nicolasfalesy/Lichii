@@ -1187,6 +1187,22 @@ bool KeplerCompute::TryOcarinaMovieUpscale() {
     return done;
 }
 
+namespace {
+bool OcarinaPostTrace() {
+    static const bool enabled = std::getenv("EDEN_NX2_OCARINA_POST_TRACE") != nullptr;
+    return enabled;
+}
+
+// EDEN_NX2_OCARINA_POST=scan: find the chain's images by scanning the constant bank, as before.
+bool OcarinaPostScan() {
+    static const bool scan = [] {
+        const char* const option = std::getenv("EDEN_NX2_OCARINA_POST");
+        return option && std::string_view{option} == "scan";
+    }();
+    return scan;
+}
+} // Anonymous namespace
+
 bool KeplerCompute::ProcessOcarinaPostChain(u64 shader_hash) {
     namespace Ocarina = VideoCommon::FireEmblemUpscale::Ocarina;
     // EDEN_NX2_OCARINA_POST=native keeps the game's chain, for comparisons.
@@ -1197,15 +1213,72 @@ bool KeplerCompute::ProcessOcarinaPostChain(u64 shader_hash) {
     if (native) {
         return false;
     }
+    if (OcarinaPostTrace() &&
+        (shader_hash == Ocarina::AaClassifyHash || shader_hash == Ocarina::AaResolveHash)) {
+        // Every image handle in the dispatch's first constant buffer, logged when the set changes.
+        const bool classify = shader_hash == Ocarina::AaClassifyHash;
+        static std::string last[2];
+        std::string images;
+        const auto& cbuf = launch_description.const_buffer_config[0];
+        const GPUVAddr address = (GPUVAddr{cbuf.address_high} << 32) | cbuf.address_low;
+        const u32 bytes = (std::min<u32>)(cbuf.size.Value(), 0x400);
+        if ((launch_description.const_buffer_enable_mask & 1) && bytes >= 4 &&
+            memory_manager.IsFullyMappedRange(address, bytes)) {
+            for (u32 offset = 0; offset + 4 <= bytes; offset += 4) {
+                const u32 index = memory_manager.Read<u32>(address + offset) & 0xfffff;
+                if (index == 0 || index > regs.tic.limit ||
+                    !memory_manager.IsFullyMappedRange(
+                        regs.tic.Address() + u64{index} * sizeof(Texture::TICEntry),
+                        sizeof(Texture::TICEntry))) {
+                    continue;
+                }
+                const auto tic = GetTICEntry(index);
+                if (tic.Address() == 0 || tic.Width() < 320) {
+                    continue;
+                }
+                images += fmt::format(" +{:#x}:{:#x}/f{:#x}/{}x{}", offset, tic.Address(),
+                                      static_cast<u32>(tic.format.Value()), tic.Width(),
+                                      tic.Height());
+            }
+        }
+        if (images != last[classify]) {
+            last[classify] = images;
+            LOG_INFO(HW_GPU, "Ocarina post trace: {} images:{}", classify ? "classify" : "resolve",
+                     images);
+        }
+    }
     if (shader_hash == Ocarina::AaClassifyHash) {
-        ocarina_post_color = FindComputeColorImage(0, std::nullopt);
+        // The scene colour sits at a fixed slot; the scan is only the fallback (and what
+        // EDEN_NX2_OCARINA_POST=scan forces, to compare with the old behaviour).
+        const auto fixed = OcarinaPostScan() ? std::nullopt
+                                             : ReadComputeImage(Ocarina::PostColorOffset);
+        ocarina_post_color = fixed && Ocarina::ValidPostImage(*fixed)
+                                 ? fixed
+                                 : FindComputeColorImage(0, std::nullopt);
+        ocarina_post_skipped = ocarina_post_replaced;
         return ocarina_post_replaced;
     }
     if (shader_hash == Ocarina::AaListHash || shader_hash == Ocarina::AaEdgesHash) {
         return ocarina_post_replaced;
     }
     if (shader_hash == Ocarina::AaResolveHash) {
+        const bool was_replaced = ocarina_post_replaced;
         ocarina_post_replaced = TryOcarinaPostChainCopy();
+        // The copy failed in a frame whose classify and list passes were already skipped: the
+        // game's resolve would read work lists nobody wrote. Skip it for this one frame (the
+        // output keeps its last picture) and let the whole chain run from the next frame.
+        if (!ocarina_post_replaced && std::exchange(ocarina_post_skipped, false)) {
+            if (OcarinaPostTrace()) {
+                LOG_INFO(HW_GPU, "Ocarina post trace: copy lost mid-chain, resolve skipped once");
+            }
+            return true;
+        }
+        ocarina_post_skipped = false;
+        // EDEN_NX2_OCARINA_POST_TRACE=1: log every change between the copy and the game's chain.
+        if (OcarinaPostTrace() && was_replaced != ocarina_post_replaced) {
+            LOG_INFO(HW_GPU, "Ocarina post trace: stand-in {} -> {}", was_replaced,
+                     ocarina_post_replaced);
+        }
         return ocarina_post_replaced;
     }
     return false;
@@ -1305,10 +1378,17 @@ std::optional<Texture::TICEntry> KeplerCompute::FindComputeColorImage(
 }
 
 bool KeplerCompute::TryOcarinaPostChainCopy() {
+    namespace Ocarina = VideoCommon::FireEmblemUpscale::Ocarina;
     const auto input = std::exchange(ocarina_post_color, std::nullopt);
-    const auto output = input ? FindComputeColorImage(input->Address(), input) : std::nullopt;
+    // The output sits at a fixed slot too; scan only when that slot does not hold a match.
+    const auto fixed = input && !OcarinaPostScan() ? ReadComputeImage(Ocarina::PostOutputOffset)
+                                                   : std::nullopt;
+    const auto output = fixed && Ocarina::ValidPostPair(*input, *fixed)   ? fixed
+                        : input ? FindComputeColorImage(input->Address(), input)
+                                : std::nullopt;
     static u32 logged{};
     if (!input || !output) {
+
         if (logged++ < 4) {
             LOG_WARNING(HW_GPU, "Ocarina post chain: no colour pair (input {}, output {}); the "
                         "game's chain runs", input.has_value(), output.has_value());
@@ -1343,6 +1423,19 @@ bool KeplerCompute::TryOcarinaPostChainCopy() {
         .src_y1 = static_cast<s32>(input->Height()),
     };
     const bool done = rasterizer->AccelerateSurfaceCopy(surface(*input), surface(*output), copy);
+    if (OcarinaPostTrace()) {
+        static GPUVAddr last_input{}, last_output{};
+        static bool last_done{true};
+        if (input->Address() != last_input || output->Address() != last_output ||
+            done != last_done) {
+            LOG_INFO(HW_GPU, "Ocarina post trace: copy {} input={:#x} output={:#x} {}x{}",
+                     done ? "done" : "FAILED", input->Address(), output->Address(),
+                     output->Width(), output->Height());
+            last_input = input->Address();
+            last_output = output->Address();
+            last_done = done;
+        }
+    }
     if (logged++ < 4) {
         LOG_INFO(HW_GPU, "Ocarina post chain: {} input={:#x} output={:#x} {}x{}",
                  done ? "replaced by a copy" : "copy unavailable; the game's chain runs",
