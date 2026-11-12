@@ -952,13 +952,29 @@ void PipelineCache::LoadDiskResources(u64 title_id, std::stop_token stop_loading
             return;
         }
 
+        // The key carries the driver id and version, and draws look pipelines up with the running
+        // driver's. After a driver change (a Mesa update, another ICD) nothing cached matched: every
+        // pipeline was translated again on the GPU thread at its first draw, and the ones built at
+        // boot were never used. The pipeline is built for the running driver here either way, so
+        // the key takes its id and version. EDEN_NX2_CACHE_DRIVER_CARRY=0 keeps the stored key.
+        static const bool driver_carry = [] {
+            const char* value = std::getenv("EDEN_NX2_CACHE_DRIVER_CARRY");
+            return value == nullptr || value[0] != '0';
+        }();
+        const u64 stored_hash = key.Hash();
+        if (driver_carry) {
+            key.state.driver_id = dynamic_features.driver_id;
+            key.state.driver_version = dynamic_features.driver_version;
+        }
         const u64 hash = key.Hash();
         if (!disk_pipelines.insert(hash).second) {
             return;
         }
+        // The used list may still name the pipeline by the hash it had under the old driver.
         if (!PreloadAllPipelines() &&
             (used_pipelines.empty() ? queued_graphics >= MaxPipelinesWithoutUsedList
-                                    : !used_pipelines.contains(hash))) {
+                                    : !used_pipelines.contains(hash) &&
+                                          !used_pipelines.contains(stored_hash))) {
             ++skipped_pipelines;
             size_t capture_bytes = (envs.capacity() - envs.size()) * sizeof(FileEnvironment);
             for (const auto& env : envs) {
