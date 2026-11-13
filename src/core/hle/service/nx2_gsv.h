@@ -636,7 +636,17 @@ private:
                 }
                 // No GPU range reaches the memory any more: free its device range, so registering
                 // the address again gets a new one on the pages it has then.
-                registry.ReleaseBacking(address, size);
+                // Opt-in on this branch (EDEN_NX2_RELEASE_BACKING=1): with it, Hyrule Field drew
+                // black terrain at 2-14 fps here (2026-11-11), so something still reads the
+                // released range. A reused range is still pointed at the current pages when it is
+                // mapped again (Nx2RefreshBacking), which is the part that cures the white wash.
+                static const bool release_backing = [] {
+                    const char* value = std::getenv("EDEN_NX2_RELEASE_BACKING");
+                    return value != nullptr && value[0] == '1';
+                }();
+                if (release_backing) {
+                    registry.ReleaseBacking(address, size);
+                }
             }
             if (size == 0x2000) {
                 Tegra::Nx2RemoveSemaphoreRegion(address);
